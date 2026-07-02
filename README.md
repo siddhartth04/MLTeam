@@ -1,0 +1,114 @@
+# AI ML Engineering Team
+
+A production-grade agentic platform that behaves like an autonomous ML engineering
+team — not an AutoML tool. Upload a dataset, describe your goal in natural language,
+and an LLM planner coordinates specialized agents that profile, clean, engineer
+features, train, evaluate, critique, iterate, and produce deployment assets and reports.
+
+## Architecture
+
+Hub-and-spoke around a typed artifact store. Agents never talk to each other
+directly: every agent is a pure function `typed artifacts in → typed artifacts out`,
+and all handoffs go through the store.
+
+```mermaid
+flowchart TB
+    subgraph Gates["Human Gates"]
+        G1["Gate 1: ProblemSpec confirmation"]
+        G2["Gate 2: Training plan + cost approval"]
+        G3["Gate 3: Pre-deployment sign-off"]
+    end
+
+    subgraph Agents
+        REQ[Requirement Understanding]
+        PROF[Dataset Profiling]
+        SPLIT[Split Strategist]
+        CLEAN[Data Cleaning]
+        FEAT[Feature Engineering]
+        PLAN[Experiment Planner]
+        TRAIN[Training + Optuna]
+        EVAL[Evaluation]
+        CRITIC[Critic]
+        EXPL[Explainability]
+        DEPLOY[Deployment]
+        REPORT[Report Generator]
+    end
+
+    STORE[("Typed Artifact Store<br/>content-hash addressed<br/>SQLite lineage index<br/>holdout access guard")]
+    ORCH["Prefect Orchestrator<br/>(retries, caching, resumption)"]
+    LLM["Anthropic LLM<br/>(structured JSON only)"]
+
+    REQ & PROF & SPLIT & CLEAN & FEAT & PLAN & TRAIN & EVAL & CRITIC & EXPL & DEPLOY & REPORT <--> STORE
+    ORCH --> Agents
+    LLM -.plans / proposes.-> ORCH
+    REQ --> G1
+    PLAN --> G2
+    DEPLOY --> G3
+    CRITIC -.iterate-with-actions.-> PLAN
+```
+
+Core principles (non-negotiable):
+
+1. **Hub-and-spoke around a typed artifact store** — no prose-passing between agents.
+2. **Agents decide, libraries execute** — LLM fills configs for vetted pipeline templates; freeform code is a sandboxed fallback.
+3. **LLM plans, orchestrator runs** — Prefect owns execution, retries, caching, resumption.
+4. **Leakage-proof evaluation** — frozen holdout created at ingestion, unreadable (enforced at store level) until final reporting; all preprocessing fit inside CV folds.
+5. **Everything reproducible** — pinned seeds, uv lockfile, content hashes, full config per run.
+6. **Human gates** at problem spec, training plan, and pre-deployment.
+7. **Every cleaning/transform decision** is a logged, reversible, declarative op with a justification.
+
+## Quickstart
+
+```bash
+# Install (Python 3.11+, uv required)
+uv sync --all-groups
+
+# Run tests
+uv run pytest
+
+# Lint
+uv run ruff check .
+```
+
+A full example run (dataset upload → goal → report) lands in later phases; see
+`examples/` as phases complete.
+
+## Repository layout
+
+```
+src/mlteam/
+  contracts/        Pydantic artifact schemas (one module per artifact type)
+  store/            artifact store + SQLite lineage index + holdout guard
+  llm/              Anthropic client wrapper, structured output, cost tracking (Phase 3)
+  agents/           agents as pure functions over artifacts (Phases 1, 3)
+  templates/        registry of vetted pipeline templates (Phase 1)
+  orchestration/    Prefect flows, DAG builder, iteration loop (Phase 1, 4)
+  sandbox/          SandboxRunner for LLM-generated code (Phase 4)
+  evaluation/       metrics, leakage checks, slice analysis (Phase 1)
+  serving/          FastAPI app + Dockerfile generators (Phase 5)
+  reporting/        HTML report builder (Phase 5)
+  dashboard/        Streamlit app (Phase 6)
+  observability/    structured logging, run tracing, MLflow wiring
+benchmarks/         benchmark harness + reference scores (Phase 2)
+tests/              unit + integration tests
+examples/           sample datasets + goal prompts
+```
+
+## Build status
+
+- **Phase 0 — Skeleton & contracts** (current): repo scaffold, all artifact
+  contracts, artifact store with lineage index and holdout guard, MLflow wiring,
+  structured logging + tracing, tests.
+- Phase 1 — Deterministic tabular pipeline (no LLM)
+- Phase 2 — Evaluation harness & benchmarks
+- Phase 3 — LLM layer & first agents
+- Phase 4 — Iteration loop + HPO + sandbox
+- Phase 5 — Explainability, deployment, reports
+- Phase 6 — Streamlit dashboard
+
+### Environment notes
+
+- Docker is not available on this development machine; the Phase 4 sandbox will use
+  the documented **restricted-subprocess fallback** (loudly logged). The Docker path
+  is still implemented and auto-selected when Docker is present.
+- Prefect 3.x is used (Prefect 2.x is end-of-life); TabPFN ships as a core dependency.

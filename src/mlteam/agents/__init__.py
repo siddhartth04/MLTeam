@@ -8,8 +8,13 @@ from mlteam.agents.cleaner import (
 )
 from mlteam.agents.critic import compute_quantitative_gates, critique_evaluation
 from mlteam.agents.data_io import read_dataset, store_dataframe
-from mlteam.agents.experiment_planner import estimate_budget, plan_experiments
+from mlteam.agents.experiment_planner import (
+    estimate_budget,
+    plan_experiments,
+    revise_experiment_plan,
+)
 from mlteam.agents.feature_engineer import propose_features
+from mlteam.agents.hpo import SEARCH_SPACES, HPOOutcome, tune_experiment
 from mlteam.agents.ingest import ingest_file
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
@@ -18,6 +23,8 @@ from mlteam.agents.trainer import TrainResult, compute_env_hash, train_experimen
 
 __all__ = [
     "EXECUTABLE_OP_TYPES",
+    "SEARCH_SPACES",
+    "HPOOutcome",
     "TrainResult",
     "compute_env_hash",
     "compute_quantitative_gates",
@@ -32,7 +39,9 @@ __all__ = [
     "propose_cleaning_ops_llm",
     "propose_features",
     "read_dataset",
+    "revise_experiment_plan",
     "store_dataframe",
     "train_experiment",
+    "tune_experiment",
     "understand_requirements",
 ]

@@ -1,0 +1,205 @@
+[
+  {
+    "json": {
+      "task_type": "binary_classification",
+      "target_column": "churned",
+      "prediction_horizon": null,
+      "primary_metric": "roc_auc",
+      "secondary_metrics": [
+        "accuracy",
+        "f1_macro"
+      ],
+      "business_constraints": [
+        "prefer explainable ranking of at-risk customers"
+      ],
+      "cost_asymmetry": {
+        "false_positive_cost": 1.0,
+        "false_negative_cost": 4.0,
+        "rationale": "losing a customer costs far more than a retention call"
+      },
+      "assumptions": [
+        "churned=1 means the customer left"
+      ]
+    },
+    "usage": {
+      "input_tokens": 900,
+      "output_tokens": 180
+    }
+  },
+  {
+    "json": {
+      "ops": [
+        {
+          "op_type": "standardize_missing_tokens",
+          "columns": [
+            "contract_type"
+          ],
+          "tokens": [
+            "",
+            "na",
+            "n/a",
+            "null",
+            "none",
+            "nan",
+            "?"
+          ],
+          "justification": "contract_type contains textual 'N/A' tokens that should be real nulls",
+          "affected_columns": [
+            "contract_type"
+          ]
+        },
+        {
+          "op_type": "drop_column",
+          "column": "row_id",
+          "justification": "row_id is near-unique per row (suspected identifier) and invites memorization",
+          "affected_columns": [
+            "row_id"
+          ]
+        },
+        {
+          "op_type": "drop_column",
+          "column": "region",
+          "justification": "region is constant and carries no signal",
+          "affected_columns": [
+            "region"
+          ]
+        },
+        {
+          "op_type": "drop_duplicate_rows",
+          "justification": "profile reports exact duplicate rows which bias CV folds",
+          "affected_columns": []
+        }
+      ]
+    },
+    "usage": {
+      "input_tokens": 1400,
+      "output_tokens": 260
+    }
+  },
+  {
+    "json": {
+      "proposals": [
+        {
+          "name": "calls_per_tenure_month",
+          "op_type": "ratio",
+          "input_columns": [
+            "num_support_calls",
+            "tenure_months"
+          ],
+          "params_json": "{}",
+          "rationale": "support-call intensity relative to customer age separates chronic complainers from long-tenured stable customers"
+        },
+        {
+          "name": "charges_log",
+          "op_type": "log_transform",
+          "input_columns": [
+            "monthly_charges"
+          ],
+          "params_json": "{}",
+          "rationale": "monthly charges are right-skewed; log compresses the tail for tree split stability"
+        },
+        {
+          "name": "contract_freq",
+          "op_type": "frequency_encode",
+          "input_columns": [
+            "contract_type"
+          ],
+          "params_json": "{\"min_frequency\": 2}",
+          "rationale": "contract type frequency captures plan popularity without one-hot sparsity"
+        }
+      ]
+    },
+    "usage": {
+      "input_tokens": 1500,
+      "output_tokens": 240
+    }
+  },
+  {
+    "json": {
+      "experiments": [
+        {
+          "experiment_id": "exp-dummy",
+          "template_id": "dummy_baseline",
+          "config": {},
+          "is_baseline": true
+        },
+        {
+          "experiment_id": "exp-lgbm-default",
+          "template_id": "lightgbm_default",
+          "config": {
+            "n_estimators": 30
+          },
+          "is_baseline": true
+        },
+        {
+          "experiment_id": "exp-lgbm-tuned",
+          "template_id": "lightgbm_default",
+          "config": {
+            "n_estimators": 60,
+            "learning_rate": 0.08,
+            "num_leaves": 15
+          },
+          "is_baseline": false
+        }
+      ],
+      "rationale": "small dataset (~190 train rows): shallow LightGBM variants; TabPFN omitted to keep the run fast"
+    },
+    "usage": {
+      "input_tokens": 1600,
+      "output_tokens": 220
+    }
+  },
+  {
+    "json": {
+      "findings": [
+        {
+          "severity": "high",
+          "category": "capacity",
+          "evidence": "roc_auc mean suggests underfit on a small dataset",
+          "recommendation": "increase model capacity moderately and regularize"
+        }
+      ],
+      "verdict": "iterate_with_actions",
+      "iteration_actions": [
+        "try a LightGBM config with more estimators and stronger regularization",
+        "consider tuned learning rate around 0.05-0.1"
+      ]
+    },
+    "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 180
+    }
+  },
+  {
+    "json": {
+      "experiments": [
+        {
+          "experiment_id": "exp-lgbm-rev1",
+          "template_id": "lightgbm_default",
+          "config": {
+            "n_estimators": 40,
+            "learning_rate": 0.06,
+            "reg_lambda": 1.0
+          },
+          "is_baseline": false
+        }
+      ],
+      "rationale": "addresses 'more estimators + regularization' from the critique"
+    },
+    "usage": {
+      "input_tokens": 1300,
+      "output_tokens": 160
+    }
+  },
+  {
+    "json": {
+      "findings": [],
+      "verdict": "approve",
+      "iteration_actions": []
+    },
+    "usage": {
+      "input_tokens": 1200,
+      "output_tokens": 90
+    }
+  }
+]

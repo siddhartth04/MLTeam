@@ -7,6 +7,7 @@ package stays cheap.
 """
 
 from mlteam.orchestration.agentic import AgenticResult, run_agentic_pipeline
+from mlteam.orchestration.budget import BudgetTracker, RunBudget
 from mlteam.orchestration.gates import (
     ApprovalGate,
     AutoApproveGate,
@@ -16,6 +17,11 @@ from mlteam.orchestration.gates import (
     GateRejectedError,
     PrefectPauseGate,
     require_approval,
+)
+from mlteam.orchestration.iteration import (
+    IterationRecord,
+    IterativeResult,
+    run_iterative_pipeline,
 )
 from mlteam.orchestration.pipeline import (
     PipelineResult,
@@ -28,15 +34,20 @@ __all__ = [
     "AgenticResult",
     "ApprovalGate",
     "AutoApproveGate",
+    "BudgetTracker",
     "ConsoleGate",
     "GateDecision",
     "GateName",
     "GateRejectedError",
+    "IterationRecord",
+    "IterativeResult",
     "PipelineResult",
     "PrefectPauseGate",
+    "RunBudget",
     "default_experiment_specs",
     "new_run_id",
     "require_approval",
     "run_agentic_pipeline",
+    "run_iterative_pipeline",
     "run_tabular_pipeline",
 ]

@@ -8,6 +8,7 @@ The plan then awaits HUMAN GATE 2 with its cost estimate.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -89,6 +90,95 @@ def estimate_budget(template_id: str, n_rows: int) -> BudgetEstimate:
     per_1k = _SECONDS_PER_1K_ROWS.get(template_id, 10.0)
     seconds = max(_MIN_BUDGET_SECONDS, per_1k * (n_rows / 1000.0))
     return BudgetEstimate(wall_time_seconds=round(seconds, 1))
+
+
+REVISION_PROMPT = """You are the Experiment Planner of an autonomous ML \
+engineering team, revising the plan after a Critic verdict of \
+iterate_with_actions.
+
+Rules:
+- Propose 1-3 NEW candidate experiments that concretely address the Critic's \
+actions. Do not repeat an experiment_id or an identical config that was \
+already trained.
+- template_id must come from the registry list; is_baseline must be false \
+(baselines already exist).
+- config keys must be valid model constructor parameters. Ground every choice \
+in the critique actions and prior results.
+- rationale must say which critique action each experiment addresses.
+Return only JSON matching the schema."""
+
+
+class RevisionDraft(BaseModel):
+    experiments: list[ExperimentDraft] = Field(min_length=1, max_length=3)
+    rationale: str
+
+
+@dataclass(frozen=True)
+class RevisionResult:
+    """Revised candidates for one iteration. NOT an ExperimentPlan artifact —
+    that contract mandates baselines-first for full plans; a revision only
+    adds candidates, and its provenance flows through the trained models."""
+
+    specs: tuple[ExperimentSpec, ...]
+    rationale: str
+
+
+def revise_experiment_plan(
+    client: LLMClient,
+    *,
+    problem: ProblemSpec,
+    critique_actions: tuple[str, ...],
+    prior_results: list[dict[str, Any]],
+    prior_experiment_ids: set[str],
+    n_rows: int,
+) -> RevisionResult:
+    """Ask the planner for 1-3 new candidates addressing the critique."""
+    registry = [
+        {"template_id": t.template_id, "description": t.description}
+        for t in list_templates(problem.task_type)
+    ]
+    registry_ids = {entry["template_id"] for entry in registry}
+
+    def _post_validate(draft: RevisionDraft) -> None:
+        for exp in draft.experiments:
+            if exp.template_id not in registry_ids:
+                raise ValueError(
+                    f"template '{exp.template_id}' is not in the registry; "
+                    f"choose from: {sorted(registry_ids)}"
+                )
+            if exp.experiment_id in prior_experiment_ids:
+                raise ValueError(
+                    f"experiment_id '{exp.experiment_id}' was already used; "
+                    "pick a new id for the revised experiment"
+                )
+            if exp.is_baseline:
+                raise ValueError("revision experiments must have is_baseline=false")
+
+    result = client.structured(
+        agent="experiment-planner-revision",
+        system_prompt=REVISION_PROMPT,
+        user_payload={
+            "critique_actions": list(critique_actions),
+            "prior_results": prior_results,
+            "template_registry": registry,
+            "used_experiment_ids": sorted(prior_experiment_ids),
+        },
+        schema=RevisionDraft,
+        post_validate=_post_validate,
+    )
+    return RevisionResult(
+        specs=tuple(
+            ExperimentSpec(
+                experiment_id=e.experiment_id,
+                template_id=e.template_id,
+                config=e.config.to_config(),
+                budget=estimate_budget(e.template_id, n_rows),
+                is_baseline=False,
+            )
+            for e in result.output.experiments
+        ),
+        rationale=result.output.rationale,
+    )
 
 
 def plan_experiments(

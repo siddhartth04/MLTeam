@@ -118,7 +118,16 @@ examples/           sample datasets + goal prompts
   LLM can never approve past a failed hard gate). Human gates 1 & 2 wired
   (Prefect pause / console / auto-approve backends) in `run_agentic_pipeline`.
 - Phase 3 — LLM layer & first agents
-- Phase 4 — Iteration loop + HPO + sandbox
+- **Phase 4 — Iteration loop + HPO + sandbox** ✅: budget-capped
+  Plan→Execute→Evaluate→Critique→Improve loop (`run_iterative_pipeline`) with
+  explicit iteration/wall-time/LLM-cost accounting; Optuna HPO with
+  successive-halving (ASHA) pruning over vetted search spaces; a plan-revision
+  agent that proposes new candidates from critique actions; and a
+  `SandboxRunner` for LLM-generated code — Docker (`--network=none`, read-only
+  mounts, resource caps) with a loud restricted-subprocess fallback (scrubbed
+  env, private data copies, process-tree wall-clock kill). Provider-agnostic
+  LLM access via `LiteLLMTransport` (`uv sync --extra litellm`) — the same
+  agents run on any LiteLLM-supported provider.
 - Phase 5 — Explainability, deployment, reports
 - Phase 6 — Streamlit dashboard
 

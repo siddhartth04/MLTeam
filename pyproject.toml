@@ -35,6 +35,10 @@ dependencies = [
     "structlog>=24.1",
 ]
 
+[project.optional-dependencies]
+# Provider-agnostic LLM access (OpenAI, Bedrock, Azure, Ollama, ...).
+litellm = ["litellm>=1.40"]
+
 [dependency-groups]
 dev = [
     "pytest>=8",

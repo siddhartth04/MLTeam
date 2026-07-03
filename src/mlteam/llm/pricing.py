@@ -56,9 +56,27 @@ class TokenUsage:
         )
 
 
+def _resolve_prices(model: str) -> tuple[float, float] | None:
+    """Look up prices, tolerating LiteLLM provider prefixes and date suffixes.
+
+    e.g. "anthropic/claude-sonnet-4-6" and "claude-sonnet-4-6-20251114" both
+    resolve to the "claude-sonnet-4-6" row.
+    """
+    if model in PRICES_PER_MTOK:
+        return PRICES_PER_MTOK[model]
+    bare = model.split("/", 1)[-1]  # strip provider prefix
+    if bare in PRICES_PER_MTOK:
+        return PRICES_PER_MTOK[bare]
+    # Longest known id that is a prefix of the bare model (handles date suffix).
+    matches = sorted(
+        (key for key in PRICES_PER_MTOK if bare.startswith(key)), key=len, reverse=True
+    )
+    return PRICES_PER_MTOK[matches[0]] if matches else None
+
+
 def estimate_cost_usd(model: str, usage: TokenUsage) -> float | None:
     """Estimated cost of one call; None (and a loud log) for unknown models."""
-    prices = PRICES_PER_MTOK.get(model)
+    prices = _resolve_prices(model)
     if prices is None:
         _log.warning("unknown_model_pricing", model=model, hint="cost tracking disabled")
         return None

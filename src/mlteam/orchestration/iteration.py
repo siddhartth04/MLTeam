@@ -18,7 +18,7 @@ from mlteam.agents.critic import critique_evaluation
 from mlteam.agents.experiment_planner import revise_experiment_plan
 from mlteam.agents.hpo import SEARCH_SPACES, SearchSpace, tune_experiment
 from mlteam.agents.trainer import TrainResult, compute_env_hash
-from mlteam.contracts import CritiqueReport, EvaluationReport, Verdict
+from mlteam.contracts import CritiqueReport, EvaluationReport, TrainedModel, Verdict
 from mlteam.evaluation.metrics import better_than
 from mlteam.evaluation.report import build_evaluation_report
 from mlteam.llm.client import LLMClient, LLMValidationError
@@ -50,6 +50,7 @@ class IterativeResult:
     final_report: EvaluationReport
     final_critique: CritiqueReport
     best_experiment_id: str
+    best_model: TrainedModel
     budget_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
@@ -222,6 +223,7 @@ def run_iterative_pipeline(
             best=best_now,
         )
 
+    final_best = _best_key(results, primary, dummy_key)
     return IterativeResult(
         status=status,
         stop_reason=stop_reason,
@@ -229,6 +231,7 @@ def run_iterative_pipeline(
         iterations=tuple(records),
         final_report=report,
         final_critique=critique,
-        best_experiment_id=_best_key(results, primary, dummy_key),
+        best_experiment_id=final_best,
+        best_model=results[final_best].model,
         budget_snapshot=tracker.snapshot(),
     )

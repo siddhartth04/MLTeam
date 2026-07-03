@@ -18,6 +18,16 @@ def configure_logging(level: int = logging.INFO, json_output: bool = True) -> No
     ``json_output=False`` switches to a human-friendly console renderer,
     useful for local debugging; production/dashboard paths keep JSON.
     """
+    # Windows consoles default to cp1252, which cannot encode Unicode in log
+    # messages (e.g. the '·' in gate labels). Force UTF-8 so logging never
+    # crashes the process on a stray non-latin1 character.
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):  # pragma: no cover - stream may be redirected
+                pass
     renderer: structlog.typing.Processor
     if json_output:
         renderer = structlog.processors.JSONRenderer()

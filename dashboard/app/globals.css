@@ -1,0 +1,107 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #080a16;
+  color: #e8ecf8;
+}
+
+/* Ambient control-room backdrop: soft indigo/cyan glows over a fine grid. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(60rem 40rem at 12% -8%, rgba(124, 92, 255, 0.16), transparent 60%),
+    radial-gradient(50rem 40rem at 108% 8%, rgba(49, 208, 255, 0.1), transparent 55%),
+    radial-gradient(60rem 50rem at 50% 120%, rgba(124, 92, 255, 0.08), transparent 60%);
+}
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(124, 140, 200, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124, 140, 200, 0.04) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(circle at 50% 30%, black, transparent 85%);
+}
+
+@layer components {
+  .glass {
+    @apply rounded-2xl border border-base-600/70 bg-base-800/60 shadow-glass backdrop-blur-xl;
+    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0));
+  }
+  .glass-raised {
+    @apply rounded-2xl border border-base-500/60 bg-base-700/70 shadow-glass backdrop-blur-xl;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-base-500/60 bg-base-700/60 px-3 py-1 text-xs font-medium text-ink-muted;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply btn text-white;
+    background-image: linear-gradient(135deg, #7c5cff, #5a3fd6);
+    box-shadow: 0 8px 24px -8px rgba(124, 92, 255, 0.7);
+  }
+  .btn-primary:hover:not(:disabled) {
+    box-shadow: 0 10px 32px -6px rgba(124, 92, 255, 0.9);
+    transform: translateY(-1px);
+  }
+  .btn-ghost {
+    @apply btn border border-base-500/70 bg-base-700/40 text-ink hover:bg-base-600/60;
+  }
+  .btn-ok {
+    @apply btn text-base-900;
+    background-image: linear-gradient(135deg, #38e8a0, #1f9e6c);
+  }
+  .btn-danger {
+    @apply btn border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20;
+  }
+  .stat-value {
+    @apply font-mono text-3xl font-semibold tracking-tight text-ink;
+  }
+  .mono {
+    @apply font-mono text-xs text-ink-muted;
+  }
+  .label-eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-faint;
+  }
+}
+
+/* Scrollbars, tuned to the theme. */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(124, 140, 200, 0.18);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(124, 140, 200, 0.32);
+  background-clip: content-box;
+}
+
+/* Report iframes render on white; give them a rounded, contained frame. */
+.report-frame {
+  background: #ffffff;
+  border-radius: 12px;
+}

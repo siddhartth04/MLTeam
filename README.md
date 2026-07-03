@@ -96,10 +96,15 @@ examples/           sample datasets + goal prompts
 
 ## Build status
 
-- **Phase 0 — Skeleton & contracts** (current): repo scaffold, all artifact
+- **Phase 0 — Skeleton & contracts** ✅: repo scaffold, all artifact
   contracts, artifact store with lineage index and holdout guard, MLflow wiring,
   structured logging + tracing, tests.
-- Phase 1 — Deterministic tabular pipeline (no LLM)
+- **Phase 1 — Deterministic tabular pipeline (no LLM)** ✅: ingest → profile →
+  split (frozen holdout) → structural cleaning → dummy/LightGBM/TabPFN baselines
+  (preprocessing inside CV folds) → EvaluationReport with leakage checks, as a
+  Prefect flow with content-based caching. Proven: leaky-fixture detection,
+  holdout-untouched assertion, two-run bit-identical reproducibility.
+  Try it: `uv run python examples/run_example.py`
 - Phase 2 — Evaluation harness & benchmarks
 - Phase 3 — LLM layer & first agents
 - Phase 4 — Iteration loop + HPO + sandbox

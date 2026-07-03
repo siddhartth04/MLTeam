@@ -1,4 +1,4 @@
-"""Shared fixtures: temp stores and artifact factories."""
+"""Shared fixtures: temp stores, artifact factories, synthetic datasets."""
 
 from __future__ import annotations
 
@@ -12,8 +12,23 @@ from mlteam.contracts import (
     new_artifact,
 )
 from mlteam.store import GuardedArtifactStore, LocalArtifactStore
+from synthetic import make_churn_frame
 
 RUN_ID = "test-run-001"
+
+
+@pytest.fixture()
+def churn_csv(tmp_path: Path) -> Path:
+    path = tmp_path / "churn.csv"
+    make_churn_frame().write_csv(path)
+    return path
+
+
+@pytest.fixture()
+def leaky_churn_csv(tmp_path: Path) -> Path:
+    path = tmp_path / "churn_leaky.csv"
+    make_churn_frame(leaky=True).write_csv(path)
+    return path
 
 
 @pytest.fixture()

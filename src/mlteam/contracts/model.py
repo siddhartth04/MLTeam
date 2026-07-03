@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import Field
 
@@ -10,6 +10,10 @@ from mlteam.contracts.base import Artifact, ArtifactRef
 
 
 class TrainedModel(Artifact):
+    # mlflow_run_id is a per-run external tracking handle; hashing it would
+    # give identical training work a different identity on every run.
+    HASH_EXCLUDED_FIELDS: ClassVar[frozenset[str]] = frozenset({"mlflow_run_id"})
+
     experiment_id: str = Field(min_length=1)
     template_id: str = Field(min_length=1)
     pipeline_blob: str = Field(

@@ -15,7 +15,8 @@ class MLTeamSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MLTEAM_", env_file=".env", extra="ignore")
 
     artifact_store_root: Path = Path("./artifact_store")
-    mlflow_tracking_uri: str = "file:./mlruns"
+    # MLflow 3.x deprecated the ./mlruns file backend; SQLite is the local default.
+    mlflow_tracking_uri: str = "sqlite:///mlflow.db"
     trace_dir: Path = Path("./traces")
 
     anthropic_model: str = "claude-sonnet-4-6"

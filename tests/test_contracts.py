@@ -233,6 +233,29 @@ def test_nan_payload_is_rejected():
         )
 
 
+def test_mlflow_run_id_excluded_from_identity_hash():
+    from mlteam.contracts import TrainedModel
+
+    def build(mlflow_run_id):
+        return new_artifact(
+            TrainedModel,
+            producer_agent="trainer",
+            run_id=RUN,
+            experiment_id="exp-1",
+            template_id="lightgbm_default",
+            pipeline_blob="b" * 64,
+            seed=42,
+            env_hash="e" * 64,
+            train_data_ref=REF,
+            mlflow_run_id=mlflow_run_id,
+        )
+
+    a = build("mlflow-run-aaa")
+    b = build("mlflow-run-bbb")
+    assert a.meta.artifact_id == b.meta.artifact_id  # identity ignores tracking id
+    assert a.payload_dict()["mlflow_run_id"] == "mlflow-run-aaa"  # but it IS stored
+
+
 def test_dataset_role_enum_serializes_as_string():
     ds = new_artifact(
         DatasetVersion,

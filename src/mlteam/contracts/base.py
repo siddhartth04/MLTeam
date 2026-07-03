@@ -12,7 +12,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -86,6 +86,11 @@ class Artifact(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    # Fields excluded from identity hashing (side-channel values that are
+    # non-deterministic per run, e.g. external tracking ids). They are still
+    # stored — they just don't define WHAT the artifact is.
+    HASH_EXCLUDED_FIELDS: ClassVar[frozenset[str]] = frozenset()
+
     meta: ArtifactMeta
 
     @classmethod
@@ -93,8 +98,12 @@ class Artifact(BaseModel):
         return cls.__name__
 
     def payload_dict(self) -> dict[str, Any]:
-        """JSON-mode payload excluding meta; the basis of the content hash."""
+        """Full JSON-mode payload excluding meta (what gets stored)."""
         return self.model_dump(mode="json", exclude={"meta"})
+
+    def hashed_payload(self) -> dict[str, Any]:
+        """Payload used for identity hashing; excludes side-channel fields."""
+        return self.model_dump(mode="json", exclude={"meta", *type(self).HASH_EXCLUDED_FIELDS})
 
     def ref(self) -> ArtifactRef:
         return ArtifactRef(
@@ -140,7 +149,7 @@ def new_artifact(
     artifact_id = content_hash(
         {
             "type": cls.artifact_type(),
-            "payload": draft.payload_dict(),
+            "payload": draft.hashed_payload(),
             "config_hash": config_hash,
         }
     )

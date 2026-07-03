@@ -14,6 +14,8 @@ mlruns/
 traces/
 *.db
 *.sqlite
+benchmarks/data/
+benchmarks/last_results.json
 
 # OS / editor
 .DS_Store

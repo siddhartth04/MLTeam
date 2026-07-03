@@ -64,6 +64,7 @@ ignore = ["ANN401"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["."]
 
 [tool.uv]
 # Torch CPU wheels are sufficient; TabPFN does not require CUDA for our use.

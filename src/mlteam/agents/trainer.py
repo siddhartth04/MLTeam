@@ -39,6 +39,25 @@ def compute_env_hash(lock_path: Path | None = None) -> str:
     return "unlocked-environment"
 
 
+def _temporal_to_epoch(df: object) -> object:
+    """Cast Date/Datetime columns to epoch seconds (Int64).
+
+    A fixed, stateless transform (no statistics learned), so it is safe
+    outside CV folds. Proper datetime decomposition arrives with the Phase 3
+    feature-engineering ops.
+    """
+    import polars as pl
+
+    assert isinstance(df, pl.DataFrame)
+    temporal = [c for c, dt in df.schema.items() if dt in (pl.Date, pl.Datetime)]
+    if not temporal:
+        return df
+    _log.info("temporal_columns_cast_to_epoch", columns=temporal)
+    return df.with_columns(
+        [pl.col(c).cast(pl.Datetime).dt.epoch(time_unit="s").alias(c) for c in temporal]
+    )
+
+
 def _column_roles(df: object, target_column: str) -> ColumnRoles:
     import polars as pl
 
@@ -104,7 +123,7 @@ def train_experiment(
     dataset = store.get(dataset_id)
     if dataset.target_column is None:
         raise ValueError("training dataset has no declared target column")
-    df = read_dataset(store, dataset)
+    df = _temporal_to_epoch(read_dataset(store, dataset))
     roles = _column_roles(df, dataset.target_column)
 
     frame = df.to_pandas()

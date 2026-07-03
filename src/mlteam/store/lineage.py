@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -51,10 +53,21 @@ class LineageIndex:
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Connection that commits/rolls back AND closes on exit.
+
+        ``with sqlite3.connect(...)`` alone only manages the transaction; the
+        unclosed handle keeps a file lock that breaks temp-dir cleanup on
+        Windows.
+        """
         conn = sqlite3.connect(self._db_path, timeout=_SQLITE_TIMEOUT_SECONDS)
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def record(self, meta: ArtifactMeta) -> None:
         """Insert an artifact's provenance; idempotent for identical ids.

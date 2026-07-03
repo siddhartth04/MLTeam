@@ -96,8 +96,15 @@ class GuardedArtifactStore:
             conn.executescript(_SCHEMA)
         self.repair()
 
-    def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path, timeout=_SQLITE_TIMEOUT_SECONDS)
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        """Connection that commits/rolls back AND closes on exit (see lineage)."""
+        conn = sqlite3.connect(self._db_path, timeout=_SQLITE_TIMEOUT_SECONDS)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     # -- protection registry --------------------------------------------------
 

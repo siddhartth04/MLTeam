@@ -1,0 +1,65 @@
+{
+  "cmc": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 0.5017391304,
+    "metric": "accuracy",
+    "std": 0.0330364416,
+    "wall_seconds": 5.91
+  },
+  "cpu_small": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 3.0334424309,
+    "metric": "rmse",
+    "std": 0.3062172226,
+    "wall_seconds": 4.99
+  },
+  "credit_g": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 0.7726934524,
+    "metric": "roc_auc",
+    "std": 0.0561318469,
+    "wall_seconds": 12.29
+  },
+  "diabetes": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 0.7807987265,
+    "metric": "roc_auc",
+    "std": 0.0572634094,
+    "wall_seconds": 2.83
+  },
+  "sick": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 0.9971408949,
+    "metric": "roc_auc",
+    "std": 0.001826327,
+    "wall_seconds": 8.43
+  },
+  "temporal_churn": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 0.6178465347,
+    "metric": "roc_auc",
+    "std": 0.0417509783,
+    "wall_seconds": 2.19
+  },
+  "vehicle": {
+    "best_template": "lightgbm_default",
+    "holdout_untouched": true,
+    "leakage_all_pass": true,
+    "mean": 0.7677995643,
+    "metric": "accuracy",
+    "std": 0.0245275269,
+    "wall_seconds": 6.2
+  }
+}

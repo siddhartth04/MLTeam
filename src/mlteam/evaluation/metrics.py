@@ -10,7 +10,9 @@ _SCORING: dict[TaskType, dict[str, str]] = {
     TaskType.BINARY_CLASSIFICATION: {
         "roc_auc": "roc_auc",
         "accuracy": "accuracy",
-        "f1": "f1",
+        # f1_macro, not f1: the plain f1 scorer assumes pos_label=1 and
+        # crashes on string labels ("good"/"bad"); macro is label-agnostic.
+        "f1_macro": "f1_macro",
         "log_loss": "neg_log_loss",
     },
     TaskType.MULTICLASS_CLASSIFICATION: {
@@ -25,13 +27,12 @@ _SCORING: dict[TaskType, dict[str, str]] = {
     },
 }
 
-HIGHER_IS_BETTER: frozenset[str] = frozenset({"roc_auc", "accuracy", "f1", "f1_macro", "r2"})
+HIGHER_IS_BETTER: frozenset[str] = frozenset({"roc_auc", "accuracy", "f1_macro", "r2"})
 
 # Bounded metrics where a near-max mean is a leakage red flag, with thresholds.
 PERFECTION_THRESHOLDS: dict[str, float] = {
     "roc_auc": 0.999,
     "accuracy": 0.999,
-    "f1": 0.999,
     "f1_macro": 0.999,
     "r2": 0.999,
 }

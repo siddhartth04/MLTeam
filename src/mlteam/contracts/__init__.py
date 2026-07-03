@@ -29,6 +29,12 @@ from mlteam.contracts.evaluation import (
     SliceMetric,
 )
 from mlteam.contracts.experiments import BudgetEstimate, ExperimentPlan, ExperimentSpec
+from mlteam.contracts.explainability import (
+    ExplainabilityReport,
+    FeatureImportance,
+    FigureRef,
+    ImportanceMethod,
+)
 from mlteam.contracts.features import FeatureOpType, FeaturePlan, FeatureProposal, FeatureSet
 from mlteam.contracts.model import TrainedModel
 from mlteam.contracts.problem_spec import CostAsymmetry, ProblemSpec, TaskType
@@ -58,6 +64,7 @@ ARTIFACT_REGISTRY: dict[str, type[Artifact]] = {
         ExperimentPlan,
         TrainedModel,
         EvaluationReport,
+        ExplainabilityReport,
         CritiqueReport,
         DeploymentBundle,
         FinalReport,
@@ -88,13 +95,17 @@ __all__ = [
     "EvaluationReport",
     "ExperimentPlan",
     "ExperimentSpec",
+    "ExplainabilityReport",
+    "FeatureImportance",
     "FeatureOpType",
     "FeaturePlan",
     "FeatureProposal",
     "FeatureSet",
+    "FigureRef",
     "FinalReport",
     "Finding",
     "FindingSeverity",
+    "ImportanceMethod",
     "LabelIssueSummary",
     "LeakageCheck",
     "MetricSummary",

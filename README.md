@@ -128,7 +128,16 @@ examples/           sample datasets + goal prompts
   env, private data copies, process-tree wall-clock kill). Provider-agnostic
   LLM access via `LiteLLMTransport` (`uv sync --extra litellm`) — the same
   agents run on any LiteLLM-supported provider.
-- Phase 5 — Explainability, deployment, reports
+- **Phase 5 — Explainability, deployment, reports** ✅: explainability agent
+  (permutation importance + partial dependence + best-effort SHAP → Plotly JSON
+  figure artifacts, on train data only); deployment bundle behind Human Gate 3 —
+  full serialized pipeline + a Pandera inference schema (the *same* one enforced
+  at serving, killing train/serve skew) + a generated FastAPI app + Dockerfile +
+  an Evidently drift baseline; `materialize_bundle` writes a runnable serving
+  directory; and Jinja2+Plotly business/technical HTML reports. The report
+  generator is the only component that reads the frozen holdout — and only
+  through the store guard's `final_reporting_access` — to report true
+  out-of-sample metrics.
 - Phase 6 — Streamlit dashboard
 
 ### Environment notes

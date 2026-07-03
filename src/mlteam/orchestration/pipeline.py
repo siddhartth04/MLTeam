@@ -102,12 +102,16 @@ def _train_all(
     env_hash: str,
     mlflow_enabled: bool,
 ) -> tuple[dict[str, TrainResult], tuple[tuple[str, str], ...]]:
-    """Train every spec; non-dummy failures are skipped LOUDLY, not fatally."""
+    """Train every spec; non-dummy failures are skipped LOUDLY, not fatally.
+
+    Results are keyed by experiment_id — several experiments may share a
+    template (e.g. default and tuned LightGBM).
+    """
     results: dict[str, TrainResult] = {}
     skipped: list[tuple[str, str]] = []
     for spec in specs:
         try:
-            results[spec.template_id] = train_experiment(
+            results[spec.experiment_id] = train_experiment(
                 store,
                 dataset_id,
                 spec,
@@ -131,18 +135,26 @@ def _train_all(
     return results, tuple(skipped)
 
 
-def _select_best(results: dict[str, TrainResult], primary_metric: str) -> str:
-    candidates = {tid: r for tid, r in results.items() if tid != _DUMMY}
+def _dummy_key(specs: tuple[ExperimentSpec, ...]) -> str:
+    """experiment_id of the dummy-baseline spec (the sanity floor)."""
+    for spec in specs:
+        if spec.template_id == _DUMMY:
+            return spec.experiment_id
+    raise RuntimeError("experiment specs contain no dummy_baseline")
+
+
+def _select_best(results: dict[str, TrainResult], primary_metric: str, dummy_key: str) -> str:
+    candidates = {eid: r for eid, r in results.items() if eid != dummy_key}
     if not candidates:
-        raise RuntimeError("no non-dummy baseline trained successfully; cannot produce a report")
+        raise RuntimeError("no non-dummy experiment trained successfully; cannot produce a report")
     best_id, best = next(iter(candidates.items()))
-    for template_id, result in candidates.items():
+    for experiment_id, result in candidates.items():
         if better_than(
             primary_metric,
             result.metrics[primary_metric].mean,
             best.metrics[primary_metric].mean,
         ):
-            best_id, best = template_id, result
+            best_id, best = experiment_id, result
     return best_id
 
 
@@ -205,12 +217,13 @@ def run_tabular_pipeline(
         env_hash=compute_env_hash(env_lock_path),
         mlflow_enabled=mlflow_enabled,
     )
-    best_id = _select_best(results, primary_metric)
+    dummy_key = _dummy_key(specs)
+    best_key = _select_best(results, primary_metric, dummy_key)
     report = build_evaluation_report(
         store,
         run_id=run_id,
-        model_result=results[best_id],
-        dummy_result=results[_DUMMY],
+        model_result=results[best_key],
+        dummy_result=results[dummy_key],
         profile=train_profile,
         primary_metric=primary_metric,
     )
@@ -224,7 +237,7 @@ def run_tabular_pipeline(
         cleaning_manifest_id=manifest.meta.artifact_id,
         experiment_plan_id=plan.meta.artifact_id,
         evaluation_report=report,
-        best_template_id=best_id,
+        best_template_id=results[best_key].model.template_id,
         train_results=results,
         skipped_experiments=skipped,
     )

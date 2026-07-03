@@ -6,6 +6,17 @@ tasks. Prefect is imported lazily via the flows module so importing this
 package stays cheap.
 """
 
+from mlteam.orchestration.agentic import AgenticResult, run_agentic_pipeline
+from mlteam.orchestration.gates import (
+    ApprovalGate,
+    AutoApproveGate,
+    ConsoleGate,
+    GateDecision,
+    GateName,
+    GateRejectedError,
+    PrefectPauseGate,
+    require_approval,
+)
 from mlteam.orchestration.pipeline import (
     PipelineResult,
     default_experiment_specs,
@@ -14,8 +25,18 @@ from mlteam.orchestration.pipeline import (
 )
 
 __all__ = [
+    "AgenticResult",
+    "ApprovalGate",
+    "AutoApproveGate",
+    "ConsoleGate",
+    "GateDecision",
+    "GateName",
+    "GateRejectedError",
     "PipelineResult",
+    "PrefectPauseGate",
     "default_experiment_specs",
     "new_run_id",
+    "require_approval",
+    "run_agentic_pipeline",
     "run_tabular_pipeline",
 ]

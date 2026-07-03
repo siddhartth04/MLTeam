@@ -105,7 +105,18 @@ examples/           sample datasets + goal prompts
   Prefect flow with content-based caching. Proven: leaky-fixture detection,
   holdout-untouched assertion, two-run bit-identical reproducibility.
   Try it: `uv run python examples/run_example.py`
-- Phase 2 — Evaluation harness & benchmarks
+- **Phase 2 — Evaluation harness & benchmarks** ✅: 7 pinned datasets
+  (binary/multiclass/regression, imbalanced, datetime), stored reference scores,
+  one-command regression gate: `uv run python -m benchmarks.run_benchmarks`.
+  Scores reproduce with delta +0.0000.
+- **Phase 3 — LLM layer & first agents** ✅: Anthropic client with structured
+  JSON validated against Pydantic schemas (retry with error feedback, max 3),
+  full cost/token/latency tracing per call; fixture record/replay transports
+  (tests never hit the live API). Five agents: Requirement Understanding,
+  Cleaning proposer (whitelisted ops), Feature proposer, Experiment Planner
+  (baselines-first enforced), Critic (deterministic quantitative gates — the
+  LLM can never approve past a failed hard gate). Human gates 1 & 2 wired
+  (Prefect pause / console / auto-approve backends) in `run_agentic_pipeline`.
 - Phase 3 — LLM layer & first agents
 - Phase 4 — Iteration loop + HPO + sandbox
 - Phase 5 — Explainability, deployment, reports

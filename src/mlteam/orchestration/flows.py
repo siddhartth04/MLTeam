@@ -146,19 +146,20 @@ def evaluate_step(
 
 
 def _best_entry(
-    entries: dict[str, dict[str, Any]], primary_metric: str
+    entries: dict[str, dict[str, Any]], primary_metric: str, dummy_key: str
 ) -> tuple[str, dict[str, Any]]:
+    """Entries are keyed by experiment_id — templates may repeat across specs."""
     from mlteam.evaluation.metrics import better_than
 
     def mean(entry: dict[str, Any]) -> float:
         folds = entry["metrics"][primary_metric]
         return sum(folds) / len(folds)
 
-    candidates = {tid: e for tid, e in entries.items() if tid != "dummy_baseline"}
+    candidates = {eid: e for eid, e in entries.items() if eid != dummy_key}
     best_id = next(iter(candidates))
-    for template_id, entry in candidates.items():
+    for experiment_id, entry in candidates.items():
         if better_than(primary_metric, mean(entry), mean(candidates[best_id])):
-            best_id = template_id
+            best_id = experiment_id
     return best_id, candidates[best_id]
 
 
@@ -185,7 +186,9 @@ def tabular_baseline_flow(
 
     entries: dict[str, dict[str, Any]] = {}
     skipped: dict[str, str] = {}
-    for spec in default_experiment_specs(include_tabpfn=include_tabpfn):
+    specs = default_experiment_specs(include_tabpfn=include_tabpfn)
+    dummy_key = next(s.experiment_id for s in specs if s.template_id == "dummy_baseline")
+    for spec in specs:
         state = train_step(
             store_root,
             clean_info["cleaned_id"],
@@ -198,17 +201,17 @@ def tabular_baseline_flow(
             return_state=True,
         )
         if state.is_completed():
-            entries[spec.template_id] = state.result()
+            entries[spec.experiment_id] = state.result()
         elif spec.template_id == "dummy_baseline":
             raise RuntimeError("dummy baseline failed; evaluation is meaningless without it")
         else:
-            skipped[spec.template_id] = str(state.message)
+            skipped[spec.experiment_id] = str(state.message)
 
-    best_id, best_entry = _best_entry(entries, primary_metric)
+    best_id, best_entry = _best_entry(entries, primary_metric, dummy_key)
     report_id = evaluate_step(
         store_root,
         best_entry,
-        entries["dummy_baseline"],
+        entries[dummy_key],
         train_profile_id,
         primary_metric,
         run_id,

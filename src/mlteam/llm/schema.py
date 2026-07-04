@@ -60,6 +60,14 @@ def _sanitize(node: Any) -> Any:
                     "string field instead"
                 )
             cleaned["additionalProperties"] = False
+            # Strict structured-output modes (Anthropic AND OpenAI/Azure) both
+            # require EVERY property key to appear in "required", regardless
+            # of whether the Pydantic field has a default — optionality is
+            # expressed by the property's own type union, not by omission
+            # from "required". Pydantic's model_json_schema() only lists
+            # fields with no default, so we widen it here rather than at the
+            # Pydantic model (which would break Python-side defaults/validation).
+            cleaned["required"] = list(cleaned["properties"])
         return cleaned
     if isinstance(node, list):
         return [_sanitize(item) for item in node]

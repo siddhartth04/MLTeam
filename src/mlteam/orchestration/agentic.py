@@ -33,6 +33,7 @@ from mlteam.agents.requirement import understand_requirements
 from mlteam.agents.splitter import detect_time_column, plan_split
 from mlteam.agents.time_features import engineer_time_features
 from mlteam.agents.trainer import compute_env_hash
+from mlteam.agents.triage import triage_dataset
 from mlteam.contracts import CritiqueReport, ProblemSpec, TaskType
 from mlteam.evaluation.report import build_evaluation_report
 from mlteam.llm.client import LLMClient, LLMValidationError
@@ -124,9 +125,22 @@ def run_agentic_pipeline(
     )
     store.put(spec)
 
-    # -- Deterministic substrate: ingest, [time features], profile, split -----
-    raw = ingest_file(store, data_path, target_column=spec.target_column, run_id=run_id)
-    modeling_id = raw.meta.artifact_id
+    # -- Deterministic substrate: ingest, triage, [time features], split ------
+    raw = ingest_file(
+        store,
+        data_path,
+        target_column=spec.target_column,
+        run_id=run_id,
+        allow_missing_target=True,  # triage drops unlabeled rows with a report
+    )
+    triaged, triage_report = triage_dataset(
+        store,
+        raw.meta.artifact_id,
+        target_column=spec.target_column,
+        task_type=spec.task_type,
+        run_id=run_id,
+    )
+    modeling_id = triaged.meta.artifact_id
     time_column = spec.time_column
     if spec.task_type is TaskType.FORECASTING:
         # Lag/rolling/calendar features are computed pre-split: every value is
@@ -134,10 +148,10 @@ def run_agentic_pipeline(
         from mlteam.agents.data_io import read_dataset
 
         if time_column is None:
-            time_column = detect_time_column(read_dataset(store, raw))
+            time_column = detect_time_column(read_dataset(store, triaged))
         featured = engineer_time_features(
             store,
-            raw.meta.artifact_id,
+            triaged.meta.artifact_id,
             time_column=time_column,
             target_column=spec.target_column,
             run_id=run_id,
@@ -218,6 +232,14 @@ def run_agentic_pipeline(
             "estimated_total_seconds": total,
             "llm_cost_so_far_usd": client.total_cost_usd,
             "rationale": plan_rationale,
+            "data_triage": {
+                "rows_before": triage_report.rows_before,
+                "rows_after": triage_report.rows_after,
+                "remedies": [
+                    f"{r.action.value} on '{r.column}': {r.affected_rows} row(s)"
+                    for r in triage_report.remedies
+                ],
+            },
         },
     )
 
@@ -257,6 +279,7 @@ def run_agentic_pipeline(
         cleaning_manifest_id=manifest.meta.artifact_id,
         experiment_plan_id=plan_id,
         feature_dataset_id=feature_dataset_id,
+        triage_report_id=triage_report.meta.artifact_id,
         evaluation_report=report,
         best_template_id=results[best_key].model.template_id,
         train_results=results,

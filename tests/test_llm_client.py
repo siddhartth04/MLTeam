@@ -132,6 +132,20 @@ def test_schema_sanitizer_strips_unsupported_constraints():
     assert set(schema["properties"]) == {"label", "confidence"}  # names survive
 
 
+def test_schema_sanitizer_requires_fields_with_defaults():
+    """OpenAI/Azure strict mode 400s if a defaulted field is missing from
+    'required' (e.g. CostAsymmetryDraft.false_positive_cost = 1.0) — every
+    property must be listed regardless of having a Python-side default."""
+
+    class WithDefault(BaseModel):
+        name: str
+        cost: float = 1.0
+        notes: str = ""
+
+    schema = output_schema_for(WithDefault)
+    assert set(schema["required"]) == {"name", "cost", "notes"}
+
+
 def test_schema_sanitizer_handles_nested_models():
     class Inner(BaseModel):
         name: str = Field(min_length=1)

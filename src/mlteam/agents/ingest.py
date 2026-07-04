@@ -52,11 +52,15 @@ def ingest_file(
     *,
     target_column: str,
     run_id: str,
+    allow_missing_target: bool = False,
 ) -> DatasetVersion:
     """Read a CSV/parquet file, validate basics, store as raw DatasetVersion.
 
     The source file is never mutated; its contents become a content-addressed
-    parquet blob in the store.
+    parquet blob in the store. ``allow_missing_target=True`` is for the
+    pipeline path where the data-triage stage runs next and drops unlabeled
+    rows with a logged, reported justification; direct callers keep the
+    strict default.
     """
     if not path.exists():
         raise FileNotFoundError(f"dataset file not found: {path}")
@@ -71,7 +75,7 @@ def ingest_file(
         raise ValueError(f"dataset is empty: {path}")
     if target_column not in df.columns:
         raise ValueError(f"target column '{target_column}' not found; available: {df.columns}")
-    if df[target_column].null_count() > 0:
+    if not allow_missing_target and df[target_column].null_count() > 0:
         raise ValueError(
             f"target column '{target_column}' has {df[target_column].null_count()} "
             "missing values; rows without labels must be resolved before ingestion"

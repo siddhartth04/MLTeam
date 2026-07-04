@@ -50,6 +50,13 @@ from mlteam.contracts.profile import (
 from mlteam.contracts.report import FinalReport
 from mlteam.contracts.split import SplitPlan, SplitStrategy
 from mlteam.contracts.trace import RunTrace, TraceEvent, TraceEventType
+from mlteam.contracts.triage import (
+    TriageAction,
+    TriageIssue,
+    TriageIssueCode,
+    TriageRemedy,
+    TriageReport,
+)
 
 ARTIFACT_REGISTRY: dict[str, type[Artifact]] = {
     cls.artifact_type(): cls
@@ -69,6 +76,7 @@ ARTIFACT_REGISTRY: dict[str, type[Artifact]] = {
         DeploymentBundle,
         FinalReport,
         RunTrace,
+        TriageReport,
     )
 }
 
@@ -121,6 +129,11 @@ __all__ = [
     "TraceEvent",
     "TraceEventType",
     "TrainedModel",
+    "TriageAction",
+    "TriageIssue",
+    "TriageIssueCode",
+    "TriageRemedy",
+    "TriageReport",
     "Verdict",
     "WarningCode",
     "WarningSeverity",

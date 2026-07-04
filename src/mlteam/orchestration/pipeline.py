@@ -91,6 +91,8 @@ class PipelineResult:
     # Set when the feature-plan executor produced an engineered dataset;
     # training/explaining/iterating all use modeling_dataset_id.
     feature_dataset_id: str | None = None
+    # The data-readiness decisions made before profiling/splitting.
+    triage_report_id: str | None = None
 
     @property
     def modeling_dataset_id(self) -> str:
@@ -184,18 +186,33 @@ def run_tabular_pipeline(
 ) -> PipelineResult:
     """Run the full deterministic pipeline and return every artifact handle."""
     run_id = run_id or new_run_id()
-    raw = ingest_file(store, data_path, target_column=target_column, run_id=run_id)
-    modeling_id = raw.meta.artifact_id
+    raw = ingest_file(
+        store,
+        data_path,
+        target_column=target_column,
+        run_id=run_id,
+        allow_missing_target=True,  # triage drops unlabeled rows with a report
+    )
+    from mlteam.agents.triage import triage_dataset
+
+    triaged, triage_report = triage_dataset(
+        store,
+        raw.meta.artifact_id,
+        target_column=target_column,
+        task_type=task_type,
+        run_id=run_id,
+    )
+    modeling_id = triaged.meta.artifact_id
     if task_type is TaskType.FORECASTING:
         from mlteam.agents.data_io import read_dataset
         from mlteam.agents.splitter import detect_time_column
         from mlteam.agents.time_features import engineer_time_features
 
         if time_column is None:
-            time_column = detect_time_column(read_dataset(store, raw))
+            time_column = detect_time_column(read_dataset(store, triaged))
         featured = engineer_time_features(
             store,
-            raw.meta.artifact_id,
+            triaged.meta.artifact_id,
             time_column=time_column,
             target_column=target_column,
             run_id=run_id,
@@ -265,4 +282,5 @@ def run_tabular_pipeline(
         best_template_id=results[best_key].model.template_id,
         train_results=results,
         skipped_experiments=skipped,
+        triage_report_id=triage_report.meta.artifact_id,
     )

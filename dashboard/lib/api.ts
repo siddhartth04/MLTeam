@@ -99,6 +99,14 @@ export async function resolveGate(
   if (!res.ok) throw new Error(`gate action failed: ${res.status}`);
 }
 
+export async function deleteRun(uiRunId: string): Promise<void> {
+  const res = await fetch(`/api/runs/${enc(uiRunId)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `delete failed: ${res.status}`);
+  }
+}
+
 export function figureUrl(blobHash: string): string {
   return `/api/figures/${enc(blobHash)}`;
 }

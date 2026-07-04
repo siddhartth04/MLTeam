@@ -63,7 +63,10 @@ class AgenticResult:
 def _read_columns(data_path: Path) -> list[str]:
     if data_path.suffix.lower() == ".parquet":
         return list(pl.read_parquet_schema(data_path).keys())
-    return pl.read_csv(data_path, n_rows=50).columns
+    # Only column NAMES are needed here — read as all-string so no row's
+    # value (e.g. a "> 10" bucket label in an otherwise-numeric column) can
+    # ever fail dtype inference before ingestion gets a chance to normalize it.
+    return pl.read_csv(data_path, n_rows=1, infer_schema=False).columns
 
 
 def run_agentic_pipeline(

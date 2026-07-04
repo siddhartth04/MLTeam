@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 from mlteam.api.config import APISettings, get_settings
 from mlteam.api.demo import seed_demo_run
-from mlteam.api.registry import REGISTRY, RunRecord
+from mlteam.api.registry import REGISTRY, RunActiveError, RunRecord
 from mlteam.api.run_manager import launch_run
 from mlteam.api.views import (
     artifact_detail,
@@ -108,6 +108,16 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         if record is None:
             raise HTTPException(404, "run not found")
         return _run_public(record)
+
+    @app.delete("/api/runs/{ui_run_id}")
+    def delete_run(ui_run_id: str) -> dict[str, bool]:
+        try:
+            deleted = REGISTRY.delete(ui_run_id)
+        except RunActiveError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not deleted:
+            raise HTTPException(404, "run not found")
+        return {"deleted": True}
 
     @app.get("/api/runs/{ui_run_id}/events")
     def run_events(ui_run_id: str, limit: int = Query(500, le=2000)) -> list[dict[str, Any]]:

@@ -17,7 +17,19 @@ def _read_csv(path: Path) -> pl.DataFrame:
     # try_parse_dates so date columns get real Date/Datetime dtypes — the
     # profiler's DATETIME_DETECTED warning and the forecasting path (time
     # column detection, temporal split) all key off the dtype.
-    return pl.read_csv(path, try_parse_dates=True)
+    #
+    # Real-world CSVs (Kaggle especially) routinely mix numeric values with
+    # bucket labels in one column (e.g. a "Balcony" count column containing
+    # "> 10"). Polars' strict parser raises ComputeError on the first such
+    # value past its inference window, killing ingestion outright. Retry with
+    # ignore_errors=True (nulls out unparseable cells in an otherwise-typed
+    # column instead of crashing) rather than forcing every column to string
+    # — that would silently defeat numeric profiling/imputation everywhere.
+    try:
+        return pl.read_csv(path, try_parse_dates=True)
+    except pl.exceptions.ComputeError as exc:
+        _log.warning("csv_strict_parse_failed_retrying_lenient", path=str(path), error=str(exc))
+        return pl.read_csv(path, try_parse_dates=True, ignore_errors=True)
 
 
 _READERS = {

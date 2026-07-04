@@ -30,6 +30,10 @@ _MAX_EVENTS = 2000
 _QUEUE_MAXSIZE = 1000
 
 
+class RunActiveError(RuntimeError):
+    """Raised when deletion is attempted on a run that is still in flight."""
+
+
 @dataclass
 class GateRequest:
     stage: Stage
@@ -79,6 +83,26 @@ class RunRegistry:
     def list_runs(self) -> list[RunRecord]:
         with self._lock:
             return sorted(self._runs.values(), key=lambda r: r.created_at, reverse=True)
+
+    _ACTIVE_STATUSES = frozenset({RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL})
+
+    def delete(self, run_id: str) -> bool:
+        """Remove a finished run's record. Refuses to delete an in-flight run
+        (its background thread would keep writing to a vanished record)."""
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return False
+            if record.status in self._ACTIVE_STATUSES:
+                raise RunActiveError(
+                    f"run '{run_id}' is still {record.status.value} — "
+                    "reject its pending gate or wait for it to finish before deleting"
+                )
+            for q in self._subscribers.pop(run_id, []):
+                with contextlib.suppress(queue.Full):
+                    q.put_nowait(StreamEvent(type="done", data={"status": "deleted"}))
+            del self._runs[run_id]
+            return True
 
     # -- publishing -------------------------------------------------------------
 

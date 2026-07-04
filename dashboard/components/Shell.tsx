@@ -2,13 +2,16 @@
 
 import { motion } from "framer-motion";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { Suspense, type ReactNode } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, type ReactNode, useState } from "react";
+import { mutate } from "swr";
 
-import { useGates, useRuns } from "@/lib/api";
+import { deleteRun, useGates, useRuns } from "@/lib/api";
 
 import { RunProvider, useActiveRun } from "./RunContext";
 import { StatusPill } from "./primitives";
+
+const DELETABLE_STATUSES = new Set(["completed", "failed", "rejected"]);
 
 const NAV = [
   { href: "/", label: "Launch", icon: "◆" },
@@ -23,7 +26,27 @@ const NAV = [
 function RunSelector() {
   const { data: runs } = useRuns();
   const { runId, setRunId } = useActiveRun();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
   const list = runs ?? [];
+
+  async function handleDelete(id: string) {
+    setDeleting(id);
+    try {
+      await deleteRun(id);
+      await mutate("/api/runs");
+      if (id === runId) router.push(pathname);
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      alert(err instanceof Error ? err.message : "Failed to delete run");
+    } finally {
+      setDeleting(null);
+      setPendingDelete(null);
+    }
+  }
+
   return (
     <div className="px-3">
       <div className="label-eyebrow mb-2 px-1">Active run</div>
@@ -33,32 +56,71 @@ function RunSelector() {
         )}
         {list.map((r) => {
           const active = r.ui_run_id === runId;
+          const canDelete = DELETABLE_STATUSES.has(r.status);
+          const confirming = pendingDelete === r.ui_run_id;
           return (
-            <button
+            <div
               key={r.ui_run_id}
-              onClick={() => setRunId(r.ui_run_id)}
-              className={`w-full rounded-xl border px-3 py-2 text-left transition-all ${
+              className={`group relative w-full rounded-xl border transition-all ${
                 active
                   ? "border-accent/60 bg-accent/10"
                   : "border-transparent bg-base-700/40 hover:bg-base-600/50"
               }`}
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="mono truncate text-ink">{r.ui_run_id}</span>
-                <span
-                  className={`h-2 w-2 flex-none rounded-full ${
-                    r.status === "running" || r.status === "awaiting_approval"
-                      ? "bg-accent-bright"
-                      : r.status === "completed"
-                        ? "bg-ok"
-                        : r.status === "failed" || r.status === "rejected"
-                          ? "bg-danger"
-                          : "bg-ink-faint"
-                  }`}
-                />
-              </div>
-              <div className="mt-0.5 truncate text-[11px] text-ink-faint">{r.goal_text}</div>
-            </button>
+              <button onClick={() => setRunId(r.ui_run_id)} className="w-full px-3 py-2 text-left">
+                <div className="flex items-center justify-between gap-2 pr-5">
+                  <span className="mono truncate text-ink">{r.ui_run_id}</span>
+                  <span
+                    className={`h-2 w-2 flex-none rounded-full ${
+                      r.status === "running" || r.status === "awaiting_approval"
+                        ? "bg-accent-bright"
+                        : r.status === "completed"
+                          ? "bg-ok"
+                          : r.status === "failed" || r.status === "rejected"
+                            ? "bg-danger"
+                            : "bg-ink-faint"
+                    }`}
+                  />
+                </div>
+                <div className="mt-0.5 truncate text-[11px] text-ink-faint">{r.goal_text}</div>
+              </button>
+              {canDelete && !confirming && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPendingDelete(r.ui_run_id);
+                  }}
+                  title="Delete run"
+                  className="absolute right-1.5 top-1.5 rounded-md p-1 text-ink-faint opacity-0 transition-opacity hover:bg-danger/20 hover:text-danger group-hover:opacity-100"
+                >
+                  ✕
+                </button>
+              )}
+              {confirming && (
+                <div className="absolute inset-0 flex items-center justify-end gap-1.5 rounded-xl bg-base-850/95 px-2">
+                  <span className="text-[11px] text-ink-muted">Delete?</span>
+                  <button
+                    disabled={deleting === r.ui_run_id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDelete(r.ui_run_id);
+                    }}
+                    className="rounded-md bg-danger/80 px-2 py-1 text-[11px] font-medium text-white hover:bg-danger disabled:opacity-50"
+                  >
+                    {deleting === r.ui_run_id ? "…" : "Yes"}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPendingDelete(null);
+                    }}
+                    className="rounded-md bg-base-600/60 px-2 py-1 text-[11px] text-ink-muted hover:bg-base-600"
+                  >
+                    No
+                  </button>
+                </div>
+              )}
+            </div>
           );
         })}
       </div>
@@ -105,6 +167,8 @@ function TopBar() {
 
 function Sidebar() {
   const pathname = usePathname();
+  const params = useSearchParams();
+  const runQuery = params.get("run");
   return (
     <aside className="fixed left-0 top-0 z-30 flex h-screen w-64 flex-col gap-6 border-r border-base-600/60 bg-base-850/80 py-6 backdrop-blur-xl">
       <div className="flex items-center gap-3 px-5">
@@ -122,10 +186,11 @@ function Sidebar() {
       <nav className="flex flex-col gap-1 px-3">
         {NAV.map((item) => {
           const active = pathname === item.href;
+          const href = runQuery ? `${item.href}?run=${encodeURIComponent(runQuery)}` : item.href;
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={href}
               className={`group relative flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
                 active ? "bg-accent/12 text-ink" : "text-ink-muted hover:bg-base-700/50 hover:text-ink"
               }`}

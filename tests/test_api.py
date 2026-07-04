@@ -174,6 +174,34 @@ def test_gate_approval_flow(client, tmp_path):
     assert api.post(f"/api/runs/{ui_run_id}/gate", json={"approved": True}).status_code == 409
 
 
+def test_delete_completed_run(client, tmp_path):
+    api, reg, _ = client
+    ui_run_id = _launch(client, tmp_path)
+    _wait_for_completion(reg, ui_run_id)
+
+    resp = api.delete(f"/api/runs/{ui_run_id}")
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": True}
+    assert api.get(f"/api/runs/{ui_run_id}").status_code == 404
+    assert reg.get(ui_run_id) is None
+
+
+def test_delete_unknown_run_is_404(client):
+    api, _, _ = client
+    assert api.delete("/api/runs/does-not-exist").status_code == 404
+
+
+def test_delete_active_run_is_409(client):
+    api, reg, _ = client
+    ui_run_id = "in-flight-run"
+    reg.create(ui_run_id, goal_text="g", dataset_name="d")
+    reg.set_status(ui_run_id, RunStatus.RUNNING)
+
+    resp = api.delete(f"/api/runs/{ui_run_id}")
+    assert resp.status_code == 409
+    assert reg.get(ui_run_id) is not None  # untouched
+
+
 def test_explainability_endpoint(client, tmp_path):
     api, reg, _ = client
     ui_run_id = _launch(client, tmp_path)

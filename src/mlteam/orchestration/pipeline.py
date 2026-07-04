@@ -173,19 +173,37 @@ def run_tabular_pipeline(
     lgbm_config: dict | None = None,
     mlflow_enabled: bool = False,
     env_lock_path: Path | None = None,
+    time_column: str | None = None,
 ) -> PipelineResult:
     """Run the full deterministic pipeline and return every artifact handle."""
     run_id = run_id or new_run_id()
     raw = ingest_file(store, data_path, target_column=target_column, run_id=run_id)
-    raw_profile = profile_dataset(store, raw.meta.artifact_id, run_id=run_id, seed=seed)
+    modeling_id = raw.meta.artifact_id
+    if task_type is TaskType.FORECASTING:
+        from mlteam.agents.data_io import read_dataset
+        from mlteam.agents.splitter import detect_time_column
+        from mlteam.agents.time_features import engineer_time_features
+
+        if time_column is None:
+            time_column = detect_time_column(read_dataset(store, raw))
+        featured = engineer_time_features(
+            store,
+            raw.meta.artifact_id,
+            time_column=time_column,
+            target_column=target_column,
+            run_id=run_id,
+        )
+        modeling_id = featured.meta.artifact_id
+    raw_profile = profile_dataset(store, modeling_id, run_id=run_id, seed=seed)
     split = plan_split(
         store,
-        raw.meta.artifact_id,
+        modeling_id,
         task_type=task_type,
         run_id=run_id,
         seed=seed,
         holdout_fraction=holdout_fraction,
         n_folds=n_folds,
+        time_column=time_column,
     )
     train_profile = profile_dataset(store, split.train_ref.artifact_id, run_id=run_id, seed=seed)
     cleaned, manifest = execute_cleaning(

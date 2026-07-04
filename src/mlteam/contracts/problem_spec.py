@@ -13,6 +13,15 @@ class TaskType(StrEnum):
     BINARY_CLASSIFICATION = "binary_classification"
     MULTICLASS_CLASSIFICATION = "multiclass_classification"
     REGRESSION = "regression"
+    # Forecasting is direct supervised regression over lag/rolling/calendar
+    # features with strictly chronological splitting — never shuffled CV.
+    FORECASTING = "forecasting"
+
+
+def is_classification(task_type: TaskType) -> bool:
+    """True for the two classification tasks; regression AND forecasting are
+    regression-like everywhere downstream (regressor branch, rmse/mae/r2)."""
+    return task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION)
 
 
 class CostAsymmetry(BaseModel):
@@ -32,6 +41,9 @@ class ProblemSpec(Artifact):
     task_type: TaskType
     target_column: str = Field(min_length=1)
     prediction_horizon: str | None = None
+    # Required context for FORECASTING: the datetime column that orders rows.
+    # None lets the splitter auto-detect a single Date/Datetime column.
+    time_column: str | None = None
     primary_metric: str = Field(min_length=1)
     secondary_metrics: tuple[str, ...] = ()
     business_constraints: tuple[str, ...] = ()

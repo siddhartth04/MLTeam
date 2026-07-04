@@ -95,7 +95,7 @@ def _execute(
     # Imported here to keep module import light and avoid heavy deps at import.
     from mlteam.agents.deployer import build_deployment_bundle
     from mlteam.agents.explainer import explain_model
-    from mlteam.contracts import TaskType
+    from mlteam.contracts import is_classification
     from mlteam.orchestration import run_iterative_pipeline
     from mlteam.orchestration.budget import RunBudget
     from mlteam.reporting import ReportInputs, build_final_report
@@ -150,7 +150,7 @@ def _execute(
             store,
             best_model,
             train_dataset_id=pipeline.cleaned_dataset_id,
-            task_is_classification=spec.task_type != TaskType.REGRESSION,
+            task_is_classification=is_classification(spec.task_type),
             run_id=result.initial.run_id,
             seed=seed,
         )

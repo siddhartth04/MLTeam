@@ -29,9 +29,10 @@ from mlteam.agents.feature_engineer import propose_features
 from mlteam.agents.ingest import ingest_file
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
-from mlteam.agents.splitter import plan_split
+from mlteam.agents.splitter import detect_time_column, plan_split
+from mlteam.agents.time_features import engineer_time_features
 from mlteam.agents.trainer import compute_env_hash
-from mlteam.contracts import CritiqueReport, ProblemSpec
+from mlteam.contracts import CritiqueReport, ProblemSpec, TaskType
 from mlteam.evaluation.report import build_evaluation_report
 from mlteam.llm.client import LLMClient, LLMValidationError
 from mlteam.orchestration.gates import ApprovalGate, GateName, require_approval
@@ -109,6 +110,7 @@ def run_agentic_pipeline(
         task_type=spec.task_type,
         target_column=spec.target_column,
         prediction_horizon=spec.prediction_horizon,
+        time_column=spec.time_column,
         primary_metric=spec.primary_metric,
         secondary_metrics=spec.secondary_metrics,
         business_constraints=spec.business_constraints,
@@ -118,17 +120,35 @@ def run_agentic_pipeline(
     )
     store.put(spec)
 
-    # -- Deterministic substrate: ingest, profile, split ---------------------
+    # -- Deterministic substrate: ingest, [time features], profile, split -----
     raw = ingest_file(store, data_path, target_column=spec.target_column, run_id=run_id)
-    raw_profile = profile_dataset(store, raw.meta.artifact_id, run_id=run_id, seed=seed)
+    modeling_id = raw.meta.artifact_id
+    time_column = spec.time_column
+    if spec.task_type is TaskType.FORECASTING:
+        # Lag/rolling/calendar features are computed pre-split: every value is
+        # backward-looking, so holdout rows carry real history — no leakage.
+        from mlteam.agents.data_io import read_dataset
+
+        if time_column is None:
+            time_column = detect_time_column(read_dataset(store, raw))
+        featured = engineer_time_features(
+            store,
+            raw.meta.artifact_id,
+            time_column=time_column,
+            target_column=spec.target_column,
+            run_id=run_id,
+        )
+        modeling_id = featured.meta.artifact_id
+    raw_profile = profile_dataset(store, modeling_id, run_id=run_id, seed=seed)
     split = plan_split(
         store,
-        raw.meta.artifact_id,
+        modeling_id,
         task_type=spec.task_type,
         run_id=run_id,
         seed=seed,
         holdout_fraction=holdout_fraction,
         n_folds=n_folds,
+        time_column=time_column,
     )
     train_profile = profile_dataset(store, split.train_ref.artifact_id, run_id=run_id, seed=seed)
 

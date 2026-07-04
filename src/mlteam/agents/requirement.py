@@ -20,9 +20,13 @@ learning problem specification.
 
 Rules:
 - Choose the target column ONLY from the provided dataset columns.
-- Pick task_type from the allowed values based on the goal and target semantics.
+- Pick task_type from the allowed values based on the goal and target semantics. \
+Use forecasting ONLY when the goal is to predict future values of a numeric \
+series over time (e.g. "forecast next month's sales") — then also set \
+time_column to the dataset's date/time column and prediction_horizon to the \
+requested horizon.
 - primary_metric must fit the task: binary -> roc_auc/accuracy/f1_macro/log_loss; \
-multiclass -> accuracy/f1_macro/log_loss; regression -> rmse/mae/r2.
+multiclass -> accuracy/f1_macro/log_loss; regression or forecasting -> rmse/mae/r2.
 - cost_asymmetry: express the business cost ratio of false positives vs false \
 negatives if the goal implies one; otherwise leave both at 1.0.
 - Record assumptions you had to make. Be conservative: do not invent constraints \
@@ -42,6 +46,7 @@ class ProblemSpecDraft(BaseModel):
     task_type: TaskType
     target_column: str
     prediction_horizon: str | None = None
+    time_column: str | None = None
     primary_metric: str
     secondary_metrics: list[str] = Field(default_factory=list)
     business_constraints: list[str] = Field(default_factory=list)
@@ -71,6 +76,11 @@ def understand_requirements(
                 f"primary_metric '{draft.primary_metric}' is invalid for "
                 f"{draft.task_type.value}; choose one of: {sorted(valid_metrics)}"
             )
+        if draft.time_column is not None and draft.time_column not in dataset_columns:
+            raise ValueError(
+                f"time_column '{draft.time_column}' is not in the dataset; "
+                f"choose one of: {dataset_columns}"
+            )
 
     result = client.structured(
         agent="requirement-understanding",
@@ -90,6 +100,7 @@ def understand_requirements(
         task_type=draft.task_type,
         target_column=draft.target_column,
         prediction_horizon=draft.prediction_horizon,
+        time_column=draft.time_column,
         primary_metric=draft.primary_metric,
         secondary_metrics=tuple(draft.secondary_metrics),
         business_constraints=tuple(draft.business_constraints),

@@ -25,6 +25,13 @@ _SCORING: dict[TaskType, dict[str, str]] = {
         "mae": "neg_mean_absolute_error",
         "r2": "r2",
     },
+    # Forecasting is scored like regression; the difference is in splitting
+    # (chronological) and features (lags), not in the error measures.
+    TaskType.FORECASTING: {
+        "rmse": "neg_root_mean_squared_error",
+        "mae": "neg_mean_absolute_error",
+        "r2": "r2",
+    },
 }
 
 HIGHER_IS_BETTER: frozenset[str] = frozenset({"roc_auc", "accuracy", "f1_macro", "r2"})

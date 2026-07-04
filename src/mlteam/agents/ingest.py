@@ -13,8 +13,15 @@ from mlteam.store.interface import ArtifactStore
 
 _log = structlog.get_logger(__name__)
 
+def _read_csv(path: Path) -> pl.DataFrame:
+    # try_parse_dates so date columns get real Date/Datetime dtypes — the
+    # profiler's DATETIME_DETECTED warning and the forecasting path (time
+    # column detection, temporal split) all key off the dtype.
+    return pl.read_csv(path, try_parse_dates=True)
+
+
 _READERS = {
-    ".csv": pl.read_csv,
+    ".csv": _read_csv,
     ".parquet": pl.read_parquet,
 }
 

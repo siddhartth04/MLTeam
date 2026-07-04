@@ -35,11 +35,16 @@ code — you only pick templates and fill configs.
 - The plan MUST start with the cheap baselines, in this order: dummy_baseline \
 first, then lightgbm_default — both marked is_baseline=true. They are the sanity \
 floor every candidate must beat.
-- After the baselines, optionally add candidate experiments (e.g. tabpfn_default, \
-or lightgbm_default with a tuned config under a different experiment id).
-- config keys must be valid constructor parameters for the underlying model \
-(e.g. n_estimators, learning_rate, max_depth, num_leaves for LightGBM). Keep \
-configs small and justified by the data profile.
+- After the baselines, add 2-4 candidate experiments chosen for THIS dataset. \
+Guidance: xgboost_default and catboost_default are strong general candidates \
+(catboost especially on categorical-heavy data); tabpfn_default excels under \
+~10k rows; random_forest_default/extra_trees_default are robust to noise; \
+linear_default when relationships look near-linear or interpretability matters; \
+svm_default and knn_default only on small datasets (<5k rows); mlp_default on \
+larger numeric-heavy data; naive_bayes_default is classification-only.
+- Prefer an EMPTY config — every template ships vetted defaults, and HPO tunes \
+the winner later. Only set config keys when the profile clearly demands it, and \
+only keys valid for that model's constructor.
 - rationale should reference the profile (size, imbalance, cardinality).
 Return only JSON matching the schema."""
 
@@ -48,6 +53,16 @@ _SECONDS_PER_1K_ROWS: dict[str, float] = {
     "dummy_baseline": 0.5,
     "lightgbm_default": 6.0,
     "tabpfn_default": 45.0,
+    "xgboost_default": 8.0,
+    "catboost_default": 15.0,
+    "random_forest_default": 10.0,
+    "extra_trees_default": 8.0,
+    "adaboost_default": 8.0,
+    "linear_default": 2.0,
+    "svm_default": 30.0,  # quadratic in rows — heuristic assumes small data
+    "knn_default": 3.0,
+    "naive_bayes_default": 1.0,
+    "mlp_default": 20.0,
 }
 _MIN_BUDGET_SECONDS = 2.0
 
@@ -56,7 +71,10 @@ class ModelConfigDraft(BaseModel):
     """Whitelisted hyperparameters — the LLM tunes within these knobs only.
 
     (The structured-output grammar cannot express open dicts; a typed subset
-    is also exactly what 'agents decide, libraries execute' wants.)
+    is also exactly what 'agents decide, libraries execute' wants.) Knobs span
+    the template families: boosting (n_estimators/learning_rate/...), CatBoost
+    (iterations/depth/l2_leaf_reg), forests (min_samples_leaf/max_features),
+    linear/SVM (C/alpha), KNN (n_neighbors). Unused knobs stay None.
     """
 
     n_estimators: int | None = None
@@ -68,6 +86,14 @@ class ModelConfigDraft(BaseModel):
     colsample_bytree: float | None = None
     reg_alpha: float | None = None
     reg_lambda: float | None = None
+    iterations: int | None = None
+    depth: int | None = None
+    l2_leaf_reg: float | None = None
+    min_samples_leaf: int | None = None
+    max_features: float | None = None
+    C: float | None = None
+    alpha: float | None = None
+    n_neighbors: int | None = None
 
     def to_config(self) -> dict[str, Any]:
         return {k: v for k, v in self.model_dump().items() if v is not None}

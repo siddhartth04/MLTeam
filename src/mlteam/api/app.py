@@ -145,13 +145,10 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             _demo_dataset(data_path)
             dataset_name = "demo_churn.csv"
 
-        # Demo mode (or no key configured) replays the recorded fixture; live
-        # mode uses the Anthropic transport.
-        transport = (
-            FixtureTransport.from_file(_DEMO_FIXTURE)
-            if demo or not _has_api_key()
-            else AnthropicTransport()
-        )
+        # Demo mode (or no credentials configured) replays the recorded
+        # fixture; live mode uses LiteLLM if a model is configured (any
+        # provider), else the direct Anthropic transport.
+        transport, model = _select_transport(demo, settings)
         launch_run(
             ui_run_id=ui_run_id,
             data_path=data_path,
@@ -159,7 +156,7 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             dataset_name=dataset_name,
             transport=transport,
             store_root=settings.store_root,
-            model=settings.anthropic_model,
+            model=model,
         )
         return {"ui_run_id": ui_run_id}
 
@@ -252,6 +249,26 @@ def _has_api_key() -> bool:
     import os
 
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+
+
+def _select_transport(demo: bool, settings: APISettings) -> tuple[Any, str]:
+    """Pick the run's transport + model string.
+
+    Precedence: explicit demo flag > no credentials at all > configured
+    LiteLLM model (any provider) > default AnthropicTransport.
+    """
+    if demo or (not settings.llm_model and not _has_api_key()):
+        return FixtureTransport.from_file(_DEMO_FIXTURE), settings.anthropic_model
+    if settings.llm_model:
+        from mlteam.llm.litellm_transport import LiteLLMTransport
+
+        kwargs: dict[str, Any] = {}
+        if settings.llm_api_key:
+            kwargs["api_key"] = settings.llm_api_key
+        if settings.llm_api_base:
+            kwargs["api_base"] = settings.llm_api_base
+        return LiteLLMTransport(**kwargs), settings.llm_model
+    return AnthropicTransport(), settings.anthropic_model
 
 
 def _result_run_id(ui_run_id: str) -> str | None:

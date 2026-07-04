@@ -45,8 +45,45 @@ def lightgbm_search_space(trial: Any) -> dict[str, Any]:
     }
 
 
+def xgboost_search_space(trial: Any) -> dict[str, Any]:
+    """Vetted XGBoost search space."""
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 50, 400, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "max_depth": trial.suggest_int("max_depth", 3, 10),
+        "min_child_weight": trial.suggest_int("min_child_weight", 1, 10),
+        "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+        "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+        "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
+    }
+
+
+def catboost_search_space(trial: Any) -> dict[str, Any]:
+    """Vetted CatBoost search space."""
+    return {
+        "iterations": trial.suggest_int("iterations", 100, 500, log=True),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        "depth": trial.suggest_int("depth", 4, 10),
+        "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0, log=True),
+    }
+
+
+def random_forest_search_space(trial: Any) -> dict[str, Any]:
+    """Vetted random-forest search space."""
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 100, 500, log=True),
+        "max_depth": trial.suggest_int("max_depth", 4, 20),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
+        "max_features": trial.suggest_float("max_features", 0.3, 1.0),
+    }
+
+
 SEARCH_SPACES: dict[str, SearchSpace] = {
     "lightgbm_default": lightgbm_search_space,
+    "xgboost_default": xgboost_search_space,
+    "catboost_default": catboost_search_space,
+    "random_forest_default": random_forest_search_space,
+    "extra_trees_default": random_forest_search_space,  # same knob semantics
 }
 
 

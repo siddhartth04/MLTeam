@@ -18,6 +18,13 @@ class APISettings(BaseSettings):
     # The Next.js dev server origin; CORS is permissive in dev, tighten in prod.
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
     anthropic_model: str = "claude-sonnet-4-6"
+    # Set to any LiteLLM model string (e.g. "openai/gpt-4o", "ollama/llama3",
+    # "gemini/gemini-2.5-pro") to run live via LiteLLM instead of the direct
+    # Anthropic SDK. Requires `uv sync --extra litellm`. Leave unset to keep
+    # using AnthropicTransport for "claude-*" models.
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    llm_api_base: str | None = None
 
 
 @lru_cache

@@ -37,7 +37,7 @@ from mlteam.contracts.explainability import (
 )
 from mlteam.contracts.features import FeatureOpType, FeaturePlan, FeatureProposal, FeatureSet
 from mlteam.contracts.model import TrainedModel
-from mlteam.contracts.problem_spec import CostAsymmetry, ProblemSpec, TaskType
+from mlteam.contracts.problem_spec import CostAsymmetry, ProblemSpec, TaskType, is_classification
 from mlteam.contracts.profile import (
     ColumnProfile,
     CorrelationPair,
@@ -117,6 +117,7 @@ __all__ = [
     "SplitStrategy",
     "TargetRelationship",
     "TaskType",
+    "is_classification",
     "TraceEvent",
     "TraceEventType",
     "TrainedModel",

@@ -71,8 +71,12 @@ def _column_roles(df: object, target_column: str) -> ColumnRoles:
 
 
 def _make_cv(task_type: TaskType, n_folds: int, seed: int) -> object:
-    from sklearn.model_selection import KFold, StratifiedKFold
+    from sklearn.model_selection import KFold, StratifiedKFold, TimeSeriesSplit
 
+    if task_type is TaskType.FORECASTING:
+        # Rows arrive time-sorted from the temporal splitter; expanding-window
+        # CV means every fold trains strictly on the past. Never shuffle.
+        return TimeSeriesSplit(n_splits=n_folds)
     if task_type is TaskType.REGRESSION:
         return KFold(n_splits=n_folds, shuffle=True, random_state=seed)
     return StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)

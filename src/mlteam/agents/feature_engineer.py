@@ -1,8 +1,9 @@
 """Feature Engineering agent: domain-informed feature proposals (whitelisted ops).
 
-The LLM proposes FeatureProposals from the FeatureOpType whitelist; execution
-happens INSIDE sklearn pipelines (fit within CV folds) when the iteration loop
-consumes the plan — never as precomputed columns on full data.
+The LLM proposes FeatureProposals from the FeatureOpType whitelist; the
+deterministic executor (feature_executor.py) then applies the row-local
+stateless subset to the train dataset and drops stat-learning ops loudly —
+see that module for the exact leakage rules.
 """
 
 from __future__ import annotations
@@ -31,14 +32,18 @@ Rules:
 - Use ONLY the whitelisted op types in the schema (ratio, difference, product, \
 log_transform, binning, datetime_decompose, one_hot_encode, ordinal_encode, \
 target_encode, frequency_encode, group_aggregate, text_length).
+- PREFER row-local ops: ratio, difference, product, log_transform, \
+datetime_decompose, text_length, and binning with explicit params_json \
+{"edges": [...]}. The executor runs these. Ops that learn statistics \
+(target_encode, frequency_encode, group_aggregate, binning without edges) and \
+redundant encodings (one_hot/ordinal — the pipeline already encodes) are \
+DROPPED at execution time, so proposing them wastes your feature budget.
 - input_columns must be existing dataset columns; never use the target column \
 as an input.
 - Each proposal needs a domain rationale: WHY this feature should carry signal \
 for the stated problem, not just what it computes.
 - Prefer a handful of high-conviction features over a long speculative list \
 (aim for 3-8).
-- Features are executed inside cross-validation pipelines, so target encoding \
-is allowed — it will be fit per-fold.
 Return only JSON matching the schema."""
 
 

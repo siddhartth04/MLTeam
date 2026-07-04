@@ -117,7 +117,7 @@ def seed_demo_run(
         explain_report = explain_model(
             store,
             result.best_model,
-            train_dataset_id=pipeline.cleaned_dataset_id,
+            train_dataset_id=pipeline.modeling_dataset_id,
             task_is_classification=is_classification(spec.task_type),
             run_id=result.initial.run_id,
         )
@@ -127,7 +127,7 @@ def seed_demo_run(
 
         features = [
             c
-            for c in read_dataset(store, store.get(pipeline.cleaned_dataset_id)).columns
+            for c in read_dataset(store, store.get(pipeline.modeling_dataset_id)).columns
             if c != spec.target_column
         ]
         stage(Stage.DEPLOY, StageStatus.ACTIVE)
@@ -136,7 +136,7 @@ def seed_demo_run(
             model=result.best_model,
             profile=store.get(pipeline.train_profile_id),
             problem=spec,
-            train_dataset_id=pipeline.cleaned_dataset_id,
+            train_dataset_id=pipeline.modeling_dataset_id,
             feature_names=features,
             gate=AutoApproveGate(),
             run_id=result.initial.run_id,

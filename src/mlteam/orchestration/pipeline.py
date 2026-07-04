@@ -88,6 +88,13 @@ class PipelineResult:
     best_template_id: str
     train_results: dict[str, TrainResult] = field(default_factory=dict)
     skipped_experiments: tuple[tuple[str, str], ...] = ()
+    # Set when the feature-plan executor produced an engineered dataset;
+    # training/explaining/iterating all use modeling_dataset_id.
+    feature_dataset_id: str | None = None
+
+    @property
+    def modeling_dataset_id(self) -> str:
+        return self.feature_dataset_id or self.cleaned_dataset_id
 
 
 def _train_all(

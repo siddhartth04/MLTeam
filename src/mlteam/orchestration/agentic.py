@@ -26,6 +26,7 @@ from mlteam.agents.cleaner import (
 from mlteam.agents.critic import critique_evaluation
 from mlteam.agents.experiment_planner import plan_experiments
 from mlteam.agents.feature_engineer import propose_features
+from mlteam.agents.feature_executor import execute_feature_plan
 from mlteam.agents.ingest import ingest_file
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
@@ -160,13 +161,21 @@ def run_agentic_pipeline(
         ops = propose_cleaning_ops(train_profile)
     cleaned, manifest = execute_cleaning(store, split.train_ref.artifact_id, ops, run_id=run_id)
 
-    # -- LLM feature plan (optional in Phase 3; executed by the Phase 4 loop) --
+    # -- LLM feature plan + deterministic execution -----------------------------
     feature_plan_id: str | None = None
+    feature_dataset_id: str | None = None
+    modeling_dataset = cleaned
     try:
         feature_plan = propose_features(
             client, store, profile=train_profile, problem=spec, run_id=run_id
         )
         feature_plan_id = feature_plan.meta.artifact_id
+        featured_ds, _feature_set = execute_feature_plan(
+            store, cleaned.meta.artifact_id, feature_plan, run_id=run_id
+        )
+        if featured_ds is not None:
+            modeling_dataset = featured_ds
+            feature_dataset_id = featured_ds.meta.artifact_id
     except LLMValidationError as exc:
         _log.warning("feature_proposer_skipped", error=str(exc))
 
@@ -177,7 +186,7 @@ def run_agentic_pipeline(
             store,
             profile=train_profile,
             problem=spec,
-            n_rows=cleaned.n_rows,
+            n_rows=modeling_dataset.n_rows,
             run_id=run_id,
         )
         specs = plan.experiments
@@ -212,7 +221,7 @@ def run_agentic_pipeline(
     # -- Train, evaluate, critique -------------------------------------------
     results, skipped = _train_all(
         store,
-        cleaned.meta.artifact_id,
+        modeling_dataset.meta.artifact_id,
         tuple(specs),
         task_type=spec.task_type,
         run_id=run_id,
@@ -244,6 +253,7 @@ def run_agentic_pipeline(
         cleaned_dataset_id=cleaned.meta.artifact_id,
         cleaning_manifest_id=manifest.meta.artifact_id,
         experiment_plan_id=plan_id,
+        feature_dataset_id=feature_dataset_id,
         evaluation_report=report,
         best_template_id=results[best_key].model.template_id,
         train_results=results,

@@ -115,7 +115,7 @@ def run_iterative_pipeline(
     spec = initial.problem_spec
     primary = spec.primary_metric
     run_id = initial.run_id
-    dataset_id = initial.pipeline.cleaned_dataset_id
+    dataset_id = initial.pipeline.modeling_dataset_id
     env_hash = compute_env_hash()
 
     results: dict[str, TrainResult] = dict(initial.pipeline.train_results)

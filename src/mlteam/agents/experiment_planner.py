@@ -42,9 +42,15 @@ Guidance: xgboost_default and catboost_default are strong general candidates \
 linear_default when relationships look near-linear or interpretability matters; \
 svm_default and knn_default only on small datasets (<5k rows); mlp_default on \
 larger numeric-heavy data; naive_bayes_default is classification-only; \
-stacking_ensemble_default pushes the accuracy ceiling when budget allows; for \
-anomaly_detection also consider the dedicated detectors (isolation_forest_default, \
-one_class_svm_default, local_outlier_factor_default) alongside the classifiers.
+stacking_ensemble_default pushes the accuracy ceiling when budget allows and \
+stacking_deep_default (5 base families + passthrough) pushes it further at ~2x \
+the cost; for anomaly_detection also consider the dedicated detectors \
+(isolation_forest_default, one_class_svm_default, local_outlier_factor_default) \
+alongside the classifiers.
+- For forecasting: ALWAYS include seasonal_naive_default as a candidate — it is \
+the honest floor (predict last season's value) and any forecaster that cannot \
+beat it is worthless. Add lightgbm_quantile_default when the business needs \
+prediction intervals, not just point forecasts.
 - Prefer an EMPTY config — every template ships vetted defaults, and HPO tunes \
 the winner later. Only set config keys when the profile clearly demands it, and \
 only keys valid for that model's constructor.
@@ -67,9 +73,12 @@ _SECONDS_PER_1K_ROWS: dict[str, float] = {
     "naive_bayes_default": 1.0,
     "mlp_default": 20.0,
     "stacking_ensemble_default": 45.0,  # 3 base models x internal cv=3
+    "stacking_deep_default": 90.0,  # 5 base models x internal cv=3 + passthrough
     "isolation_forest_default": 4.0,
     "one_class_svm_default": 20.0,
     "local_outlier_factor_default": 5.0,
+    "seasonal_naive_default": 0.5,
+    "lightgbm_quantile_default": 18.0,  # three quantile models
 }
 _MIN_BUDGET_SECONDS = 2.0
 

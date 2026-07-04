@@ -235,7 +235,7 @@ examples/           sample datasets + a runnable example
 
 ### Notes & deliberate deviations from the original spec
 
-- **Dashboard is Next.js + FastAPI, not Streamlit.** The centerpiece is a *live,
+- **Dashboard is Next.js + FastAPI.** The centerpiece is a *live,
   animated* agent-flow visualization, which Streamlit cannot render well — so the
   dashboard is a real web front end over a thin read API. (Approved deviation.)
 - **Prefect 3.x** is used (Prefect 2.x is end-of-life). It wraps the deterministic

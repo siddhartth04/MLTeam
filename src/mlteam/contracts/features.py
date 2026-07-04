@@ -1,7 +1,10 @@
-"""FeaturePlan / FeatureSet: whitelisted, in-pipeline feature engineering.
+"""FeaturePlan / FeatureSet: whitelisted feature engineering specs.
 
-Feature ops execute INSIDE sklearn Pipelines (fit within CV folds only), so
-proposals here are specs, never precomputed columns on full data.
+Proposals are specs, not columns. The executor (agents/feature_executor.py)
+precomputes only row-local stateless ops on the TRAIN dataset — each value
+depends solely on its own row, so pre-CV computation cannot leak across
+folds. Ops that learn statistics (target/frequency encode, group aggregates)
+are dropped loudly at execution time, never silently fit outside folds.
 """
 
 from __future__ import annotations

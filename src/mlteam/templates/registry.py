@@ -553,6 +553,214 @@ def _build_stacking(
     return Pipeline([("preprocess", build_preprocessor(roles)), ("model", model)])
 
 
+def _build_stacking_deep(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    """AutoGluon-style depth: 5 diverse base families, OOF meta-features via
+    internal CV, plus passthrough so the meta-learner sees the raw features
+    too. Config-free by design — the vetted bases are the tuning surface."""
+    from catboost import CatBoostClassifier, CatBoostRegressor
+    from lightgbm import LGBMClassifier, LGBMRegressor
+    from sklearn.ensemble import (
+        ExtraTreesClassifier,
+        ExtraTreesRegressor,
+        RandomForestClassifier,
+        RandomForestRegressor,
+        StackingClassifier,
+        StackingRegressor,
+    )
+    from sklearn.linear_model import LogisticRegression, Ridge
+    from sklearn.pipeline import Pipeline
+    from xgboost import XGBClassifier, XGBRegressor
+
+    lgbm: dict[str, Any] = {
+        "n_estimators": 200,
+        "learning_rate": 0.05,
+        "random_state": seed,
+        "deterministic": True,
+        "force_row_wise": True,
+        "n_jobs": 1,
+        "verbosity": -1,
+    }
+    xgb: dict[str, Any] = {
+        "n_estimators": 200,
+        "learning_rate": 0.05,
+        "random_state": seed,
+        "n_jobs": 1,
+        "verbosity": 0,
+    }
+    cat: dict[str, Any] = {
+        "iterations": 200,
+        "random_seed": seed,
+        "verbose": 0,
+        "allow_writing_files": False,
+        "thread_count": 1,
+    }
+    forest: dict[str, Any] = {"n_estimators": 200, "random_state": seed, "n_jobs": 1}
+
+    if task_type in _CLASSIFICATION:
+        model: Any = StackingClassifier(
+            estimators=[
+                ("lgbm", LGBMClassifier(**lgbm)),
+                ("xgb", LabelEncodedClassifier(XGBClassifier(**xgb))),
+                ("cat", CatBoostClassifier(**cat)),
+                ("rf", RandomForestClassifier(**forest)),
+                ("et", ExtraTreesClassifier(**forest)),
+            ],
+            final_estimator=LogisticRegression(max_iter=2000, random_state=seed),
+            cv=3,
+            passthrough=True,
+            n_jobs=1,
+        )
+    else:
+        model = StackingRegressor(
+            estimators=[
+                ("lgbm", LGBMRegressor(**lgbm)),
+                ("xgb", XGBRegressor(**xgb)),
+                ("cat", CatBoostRegressor(**cat)),
+                ("rf", RandomForestRegressor(**forest)),
+                ("et", ExtraTreesRegressor(**forest)),
+            ],
+            final_estimator=Ridge(alpha=1.0),
+            cv=3,
+            passthrough=True,
+            n_jobs=1,
+        )
+    return Pipeline([("preprocess", build_preprocessor(roles)), ("model", model)])
+
+
+class SeasonalNaiveRegressor:
+    """The honest forecasting floor: predict the value one season ago.
+
+    Reads the ``*_lag_{season_length}`` column the time-feature engineer
+    produced — no learning at all. A forecaster that cannot beat this is
+    worse than a lookup table, whatever its CV score against dummy-mean says.
+    """
+
+    _estimator_type = "regressor"  # sklearn <= 1.5 protocol
+
+    def __init__(self, season_length: int = 7) -> None:
+        self.season_length = season_length
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        return {"season_length": self.season_length}
+
+    def set_params(self, **params: Any) -> SeasonalNaiveRegressor:
+        if "season_length" in params:
+            self.season_length = params["season_length"]
+        return self
+
+    def fit(self, X: Any, y: Any) -> SeasonalNaiveRegressor:
+        suffix = f"_lag_{self.season_length}"
+        matches = [c for c in getattr(X, "columns", []) if str(c).endswith(suffix)]
+        if len(matches) != 1:
+            raise ValueError(
+                f"seasonal naive needs exactly one '*{suffix}' lag column from the "
+                f"time-feature engineer, found {matches or 'none'} — is this a "
+                "forecasting run with lag features?"
+            )
+        self.lag_column_ = matches[0]
+        import numpy as np
+
+        self.fallback_ = float(np.asarray(y, dtype=float).mean())
+        return self
+
+    def predict(self, X: Any) -> Any:
+        import numpy as np
+
+        values = np.asarray(X[self.lag_column_], dtype=float)
+        return np.where(np.isfinite(values), values, self.fallback_)
+
+    def __sklearn_tags__(self) -> Any:  # sklearn >= 1.6 protocol
+        from sklearn.base import BaseEstimator, RegressorMixin
+
+        class _Default(RegressorMixin, BaseEstimator):
+            pass
+
+        return _Default().__sklearn_tags__()
+
+
+def _build_seasonal_naive(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    # No preprocessor: the estimator reads one named lag column from the raw
+    # frame; a ColumnTransformer would strip the names it needs.
+    params: dict[str, Any] = {"season_length": 7, **dict(config)}
+    return SeasonalNaiveRegressor(**params)
+
+
+class QuantileGBMRegressor:
+    """Three quantile-objective LightGBMs (default 5%/50%/95%).
+
+    ``predict`` returns the median so every ordinary metric works unchanged;
+    ``predict_quantiles`` exposes the full band for interval-aware reports
+    and serving ("sales will be 90-110" beats "sales will be 100").
+    """
+
+    _estimator_type = "regressor"  # sklearn <= 1.5 protocol
+
+    def __init__(
+        self, quantiles: tuple[float, ...] = (0.05, 0.5, 0.95), **lgbm_params: Any
+    ) -> None:
+        self.quantiles = quantiles
+        self.lgbm_params = lgbm_params
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        return {"quantiles": self.quantiles, **self.lgbm_params}
+
+    def set_params(self, **params: Any) -> QuantileGBMRegressor:
+        if "quantiles" in params:
+            self.quantiles = params.pop("quantiles")
+        self.lgbm_params.update(params)
+        return self
+
+    def fit(self, X: Any, y: Any) -> QuantileGBMRegressor:
+        from lightgbm import LGBMRegressor
+
+        if 0.5 not in self.quantiles:
+            raise ValueError("quantiles must include 0.5 — predict() returns the median")
+        self.models_ = {
+            q: LGBMRegressor(objective="quantile", alpha=q, **self.lgbm_params).fit(X, y)
+            for q in self.quantiles
+        }
+        return self
+
+    def predict(self, X: Any) -> Any:
+        return self.models_[0.5].predict(X)
+
+    def predict_quantiles(self, X: Any) -> Any:
+        import numpy as np
+
+        return np.column_stack([self.models_[q].predict(X) for q in sorted(self.quantiles)])
+
+    def __sklearn_tags__(self) -> Any:  # sklearn >= 1.6 protocol
+        from sklearn.base import BaseEstimator, RegressorMixin
+
+        class _Default(RegressorMixin, BaseEstimator):
+            pass
+
+        return _Default().__sklearn_tags__()
+
+
+def _build_lightgbm_quantile(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    from sklearn.pipeline import Pipeline
+
+    params: dict[str, Any] = {
+        "n_estimators": 200,
+        "learning_rate": 0.05,
+        "random_state": seed,
+        "deterministic": True,
+        "force_row_wise": True,
+        "n_jobs": 1,
+        "verbosity": -1,
+        **dict(config),
+    }
+    model = QuantileGBMRegressor(**params)
+    return Pipeline([("preprocess", build_preprocessor(roles)), ("model", model)])
+
+
 _TEMPLATES: dict[str, PipelineTemplate] = {
     template.template_id: template
     for template in (
@@ -680,6 +888,30 @@ _TEMPLATES: dict[str, PipelineTemplate] = {
             task_types=_ANOMALY_ONLY,
             is_baseline=False,
             build=_build_local_outlier_factor,
+        ),
+        PipelineTemplate(
+            template_id="stacking_deep_default",
+            description="Deep stack: 5 base families (LGBM/XGB/CatBoost/RF/ExtraTrees) "
+            "+ passthrough meta — the strongest (and slowest) accuracy pusher",
+            task_types=_ALL_TASKS,
+            is_baseline=False,
+            build=_build_stacking_deep,
+        ),
+        PipelineTemplate(
+            template_id="seasonal_naive_default",
+            description="Seasonal naive — predicts the value one season ago; the "
+            "honest forecasting floor every real forecaster must beat",
+            task_types=frozenset({TaskType.FORECASTING}),
+            is_baseline=False,
+            build=_build_seasonal_naive,
+        ),
+        PipelineTemplate(
+            template_id="lightgbm_quantile_default",
+            description="LightGBM quantile trio (5/50/95%) — point forecast plus "
+            "prediction intervals for risk-aware decisions",
+            task_types=_REGRESSION_LIKE,
+            is_baseline=False,
+            build=_build_lightgbm_quantile,
         ),
     )
 }

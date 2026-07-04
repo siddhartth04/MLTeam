@@ -149,7 +149,7 @@ def _execute(
         explain_report = explain_model(
             store,
             best_model,
-            train_dataset_id=pipeline.cleaned_dataset_id,
+            train_dataset_id=pipeline.modeling_dataset_id,
             task_is_classification=is_classification(spec.task_type),
             run_id=result.initial.run_id,
             seed=seed,
@@ -163,7 +163,7 @@ def _execute(
 
         features = [
             c
-            for c in read_dataset(store, store.get(pipeline.cleaned_dataset_id)).columns
+            for c in read_dataset(store, store.get(pipeline.modeling_dataset_id)).columns
             if c != spec.target_column
         ]
         try:
@@ -172,7 +172,7 @@ def _execute(
                 model=best_model,
                 profile=store.get(pipeline.train_profile_id),
                 problem=spec,
-                train_dataset_id=pipeline.cleaned_dataset_id,
+                train_dataset_id=pipeline.modeling_dataset_id,
                 feature_names=features,
                 gate=gate,
                 run_id=result.initial.run_id,

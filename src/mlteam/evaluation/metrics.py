@@ -9,11 +9,20 @@ from mlteam.contracts import MetricSummary, TaskType
 _SCORING: dict[TaskType, dict[str, str]] = {
     TaskType.BINARY_CLASSIFICATION: {
         "roc_auc": "roc_auc",
+        # PR-AUC: the honest headline under class imbalance (fraud, churn).
+        # NOTE: sklearn's average_precision scores classes_[1] as positive,
+        # so 0/1 or False/True labels score the rare class as intended.
+        "pr_auc": "average_precision",
         "accuracy": "accuracy",
         # f1_macro, not f1: the plain f1 scorer assumes pos_label=1 and
         # crashes on string labels ("good"/"bad"); macro is label-agnostic.
         "f1_macro": "f1_macro",
         "log_loss": "neg_log_loss",
+    },
+    TaskType.ANOMALY_DETECTION: {
+        "pr_auc": "average_precision",
+        "roc_auc": "roc_auc",
+        "f1_macro": "f1_macro",
     },
     TaskType.MULTICLASS_CLASSIFICATION: {
         "accuracy": "accuracy",
@@ -34,11 +43,12 @@ _SCORING: dict[TaskType, dict[str, str]] = {
     },
 }
 
-HIGHER_IS_BETTER: frozenset[str] = frozenset({"roc_auc", "accuracy", "f1_macro", "r2"})
+HIGHER_IS_BETTER: frozenset[str] = frozenset({"roc_auc", "pr_auc", "accuracy", "f1_macro", "r2"})
 
 # Bounded metrics where a near-max mean is a leakage red flag, with thresholds.
 PERFECTION_THRESHOLDS: dict[str, float] = {
     "roc_auc": 0.999,
+    "pr_auc": 0.999,
     "accuracy": 0.999,
     "f1_macro": 0.999,
     "r2": 0.999,

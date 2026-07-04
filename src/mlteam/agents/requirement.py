@@ -25,8 +25,15 @@ Use forecasting ONLY when the goal is to predict future values of a numeric \
 series over time (e.g. "forecast next month's sales") — then also set \
 time_column to the dataset's date/time column and prediction_horizon to the \
 requested horizon.
-- primary_metric must fit the task: binary -> roc_auc/accuracy/f1_macro/log_loss; \
-multiclass -> accuracy/f1_macro/log_loss; regression or forecasting -> rmse/mae/r2.
+- Use anomaly_detection when the goal is to catch rare labeled events: fraud, \
+defects, intrusions, equipment failures. Predictive-maintenance goals map as: \
+"will it fail within X" -> anomaly_detection (or binary_classification if \
+failures are not rare); "remaining useful life / when will it fail" -> \
+regression or forecasting.
+- primary_metric must fit the task: binary -> roc_auc/pr_auc/accuracy/f1_macro/\
+log_loss; multiclass -> accuracy/f1_macro/log_loss; regression or forecasting \
+-> rmse/mae/r2; anomaly_detection -> pr_auc/roc_auc/f1_macro (prefer pr_auc — \
+it is the honest metric for rare events).
 - cost_asymmetry: express the business cost ratio of false positives vs false \
 negatives if the goal implies one; otherwise leave both at 1.0.
 - Record assumptions you had to make. Be conservative: do not invent constraints \

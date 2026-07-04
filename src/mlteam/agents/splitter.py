@@ -20,6 +20,7 @@ from mlteam.contracts import (
     SplitStrategy,
     TaskType,
     content_hash,
+    is_classification,
     new_artifact,
 )
 from mlteam.store.interface import ArtifactStore
@@ -34,10 +35,11 @@ def _choose_strategy(task_type: TaskType) -> tuple[SplitStrategy, str]:
             "forecasting target: hold out the chronological tail so evaluation "
             "simulates predicting the future — shuffled splits would leak it",
         )
-    if task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION):
+    if is_classification(task_type):
         return (
             SplitStrategy.STRATIFIED,
-            "classification target: stratify to preserve class balance in every split",
+            "classification target: stratify to preserve class balance in every split "
+            "(critical for rare-anomaly labels)",
         )
     return SplitStrategy.RANDOM, "regression target with no temporal/group structure declared"
 

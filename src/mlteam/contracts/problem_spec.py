@@ -16,12 +16,21 @@ class TaskType(StrEnum):
     # Forecasting is direct supervised regression over lag/rolling/calendar
     # features with strictly chronological splitting — never shuffled CV.
     FORECASTING = "forecasting"
+    # Labeled anomaly detection (fraud, failure/predictive-maintenance events):
+    # binary labels with a rare anomaly class. Dedicated unsupervised detectors
+    # (fit on normal rows, scored against labels) compete with the ordinary
+    # classifiers; PR-AUC is the headline metric.
+    ANOMALY_DETECTION = "anomaly_detection"
 
 
 def is_classification(task_type: TaskType) -> bool:
-    """True for the two classification tasks; regression AND forecasting are
-    regression-like everywhere downstream (regressor branch, rmse/mae/r2)."""
-    return task_type in (TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION)
+    """True for classification-like tasks (incl. labeled anomaly detection);
+    regression and forecasting take the regressor branch downstream."""
+    return task_type in (
+        TaskType.BINARY_CLASSIFICATION,
+        TaskType.MULTICLASS_CLASSIFICATION,
+        TaskType.ANOMALY_DETECTION,
+    )
 
 
 class CostAsymmetry(BaseModel):

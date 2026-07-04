@@ -51,7 +51,13 @@ def test_pipeline_produces_evaluation_report(pipeline_run):
     _, result = pipeline_run
     report = result.evaluation_report
     assert result.best_template_id == "lightgbm_default"
-    assert {m.name for m in report.cv_metrics} == {"roc_auc", "accuracy", "f1_macro", "log_loss"}
+    assert {m.name for m in report.cv_metrics} == {
+        "roc_auc",
+        "pr_auc",
+        "accuracy",
+        "f1_macro",
+        "log_loss",
+    }
     assert all(len(m.fold_values) == 3 for m in report.cv_metrics)
 
 

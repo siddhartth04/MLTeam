@@ -41,7 +41,10 @@ Guidance: xgboost_default and catboost_default are strong general candidates \
 ~10k rows; random_forest_default/extra_trees_default are robust to noise; \
 linear_default when relationships look near-linear or interpretability matters; \
 svm_default and knn_default only on small datasets (<5k rows); mlp_default on \
-larger numeric-heavy data; naive_bayes_default is classification-only.
+larger numeric-heavy data; naive_bayes_default is classification-only; \
+stacking_ensemble_default pushes the accuracy ceiling when budget allows; for \
+anomaly_detection also consider the dedicated detectors (isolation_forest_default, \
+one_class_svm_default, local_outlier_factor_default) alongside the classifiers.
 - Prefer an EMPTY config — every template ships vetted defaults, and HPO tunes \
 the winner later. Only set config keys when the profile clearly demands it, and \
 only keys valid for that model's constructor.
@@ -63,6 +66,10 @@ _SECONDS_PER_1K_ROWS: dict[str, float] = {
     "knn_default": 3.0,
     "naive_bayes_default": 1.0,
     "mlp_default": 20.0,
+    "stacking_ensemble_default": 45.0,  # 3 base models x internal cv=3
+    "isolation_forest_default": 4.0,
+    "one_class_svm_default": 20.0,
+    "local_outlier_factor_default": 5.0,
 }
 _MIN_BUDGET_SECONDS = 2.0
 

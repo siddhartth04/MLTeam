@@ -14,11 +14,21 @@ from typing import Any
 
 from mlteam.contracts import TaskType
 
-_CLASSIFICATION = frozenset({TaskType.BINARY_CLASSIFICATION, TaskType.MULTICLASS_CLASSIFICATION})
+_CLASSIFICATION = frozenset(
+    {
+        TaskType.BINARY_CLASSIFICATION,
+        TaskType.MULTICLASS_CLASSIFICATION,
+        # Labeled anomaly detection is imbalanced binary classification to
+        # every classifier template; dedicated detectors below add the
+        # unsupervised-fit alternative.
+        TaskType.ANOMALY_DETECTION,
+    }
+)
 # Forecasting reuses the regressor branch of every template: after temporal
 # splitting + lag features it is direct supervised regression.
 _REGRESSION_LIKE = frozenset({TaskType.REGRESSION, TaskType.FORECASTING})
 _ALL_TASKS = _CLASSIFICATION | _REGRESSION_LIKE
+_ANOMALY_ONLY = frozenset({TaskType.ANOMALY_DETECTION})
 
 # TabPFN operating envelope (v2, CPU): beyond this it is the wrong tool.
 TABPFN_MAX_ROWS = 10_000
@@ -359,6 +369,190 @@ def _build_mlp(
     return Pipeline([("preprocess", build_scaled_preprocessor(roles)), ("model", model)])
 
 
+class UnsupervisedAnomalyClassifier:
+    """Adapts an unsupervised outlier detector to the supervised interface.
+
+    Fits the detector on NORMAL rows only (semi-supervised novelty setup —
+    train labels exist on this platform, so use them), then scores all rows:
+    ``predict_proba`` exposes min-max-scaled anomaly scores so ranking metrics
+    (pr_auc/roc_auc) evaluate honestly against the held-back labels, and
+    ``predict`` thresholds at the training contamination rate.
+    """
+
+    _estimator_type = "classifier"  # sklearn <= 1.5 protocol
+
+    def __init__(self, detector: Any = None) -> None:
+        self.detector = detector
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        params: dict[str, Any] = {"detector": self.detector}
+        if deep and hasattr(self.detector, "get_params"):
+            for key, value in self.detector.get_params(deep=True).items():
+                params[f"detector__{key}"] = value
+        return params
+
+    def set_params(self, **params: Any) -> UnsupervisedAnomalyClassifier:
+        if "detector" in params:
+            self.detector = params.pop("detector")
+        nested = {k.split("__", 1)[1]: v for k, v in params.items() if k.startswith("detector__")}
+        if nested:
+            self.detector.set_params(**nested)
+        return self
+
+    def fit(self, X: Any, y: Any) -> UnsupervisedAnomalyClassifier:
+        import numpy as np
+        from sklearn.base import clone
+
+        y_arr = np.asarray(y)
+        classes, counts = np.unique(y_arr, return_counts=True)
+        if len(classes) != 2:
+            raise ValueError(
+                f"anomaly detection requires exactly 2 label values, got {len(classes)}"
+            )
+        self.classes_ = classes
+        # The RARE label is the anomaly by definition.
+        self._anomaly_label = classes[int(np.argmin(counts))]
+        contamination = counts.min() / counts.sum()
+        normal_mask = y_arr != self._anomaly_label
+        X_arr = np.asarray(X)
+        self.detector_ = clone(self.detector)
+        self.detector_.fit(X_arr[normal_mask])
+        train_scores = self._raw_scores(X_arr)
+        self._score_min = float(train_scores.min())
+        self._score_max = float(train_scores.max())
+        self._threshold = float(np.quantile(train_scores, 1.0 - contamination))
+        return self
+
+    def _raw_scores(self, X: Any) -> Any:
+        # decision_function: higher = more normal, for every sklearn detector.
+        return -self.detector_.decision_function(X)
+
+    def predict_proba(self, X: Any) -> Any:
+        import numpy as np
+
+        scores = self._raw_scores(np.asarray(X))
+        span = max(self._score_max - self._score_min, 1e-12)
+        p_anomaly = np.clip((scores - self._score_min) / span, 0.0, 1.0)
+        proba = np.empty((len(p_anomaly), 2))
+        anomaly_col = int(np.argmax(self.classes_ == self._anomaly_label))
+        proba[:, anomaly_col] = p_anomaly
+        proba[:, 1 - anomaly_col] = 1.0 - p_anomaly
+        return proba
+
+    def predict(self, X: Any) -> Any:
+        import numpy as np
+
+        scores = self._raw_scores(np.asarray(X))
+        normal_label = self.classes_[self.classes_ != self._anomaly_label][0]
+        return np.where(scores > self._threshold, self._anomaly_label, normal_label)
+
+    def __sklearn_tags__(self) -> Any:  # sklearn >= 1.6 protocol
+        from sklearn.base import BaseEstimator, ClassifierMixin
+
+        class _Default(ClassifierMixin, BaseEstimator):
+            pass
+
+        return _Default().__sklearn_tags__()
+
+
+def _build_isolation_forest(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    from sklearn.ensemble import IsolationForest
+    from sklearn.pipeline import Pipeline
+
+    params: dict[str, Any] = {
+        "n_estimators": 200,
+        "random_state": seed,
+        "n_jobs": 1,
+        **dict(config),
+    }
+    model = UnsupervisedAnomalyClassifier(IsolationForest(**params))
+    return Pipeline([("preprocess", build_preprocessor(roles)), ("model", model)])
+
+
+def _build_one_class_svm(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    from sklearn.pipeline import Pipeline
+    from sklearn.svm import OneClassSVM
+
+    params: dict[str, Any] = {"nu": 0.1, **dict(config)}
+    model = UnsupervisedAnomalyClassifier(OneClassSVM(**params))
+    return Pipeline([("preprocess", build_scaled_preprocessor(roles)), ("model", model)])
+
+
+def _build_local_outlier_factor(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    from sklearn.neighbors import LocalOutlierFactor
+    from sklearn.pipeline import Pipeline
+
+    # novelty=True is required to score unseen rows (CV/holdout/serving).
+    params: dict[str, Any] = {"n_neighbors": 20, "novelty": True, **dict(config)}
+    model = UnsupervisedAnomalyClassifier(LocalOutlierFactor(**params))
+    return Pipeline([("preprocess", build_scaled_preprocessor(roles)), ("model", model)])
+
+
+def _build_stacking(
+    task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
+) -> Any:
+    """Stacked ensemble of the strongest families. Deliberately config-free:
+    the vetted base models are the tuning surface, not the stack itself."""
+    from lightgbm import LGBMClassifier, LGBMRegressor
+    from sklearn.ensemble import (
+        RandomForestClassifier,
+        RandomForestRegressor,
+        StackingClassifier,
+        StackingRegressor,
+    )
+    from sklearn.linear_model import LogisticRegression, Ridge
+    from sklearn.pipeline import Pipeline
+    from xgboost import XGBClassifier, XGBRegressor
+
+    lgbm_params: dict[str, Any] = {
+        "n_estimators": 200,
+        "learning_rate": 0.05,
+        "random_state": seed,
+        "deterministic": True,
+        "force_row_wise": True,
+        "n_jobs": 1,
+        "verbosity": -1,
+    }
+    xgb_params: dict[str, Any] = {
+        "n_estimators": 200,
+        "learning_rate": 0.05,
+        "random_state": seed,
+        "n_jobs": 1,
+        "verbosity": 0,
+    }
+    rf_params: dict[str, Any] = {"n_estimators": 200, "random_state": seed, "n_jobs": 1}
+
+    if task_type in _CLASSIFICATION:
+        model: Any = StackingClassifier(
+            estimators=[
+                ("lgbm", LGBMClassifier(**lgbm_params)),
+                ("xgb", LabelEncodedClassifier(XGBClassifier(**xgb_params))),
+                ("rf", RandomForestClassifier(**rf_params)),
+            ],
+            final_estimator=LogisticRegression(max_iter=2000, random_state=seed),
+            cv=3,
+            n_jobs=1,
+        )
+    else:
+        model = StackingRegressor(
+            estimators=[
+                ("lgbm", LGBMRegressor(**lgbm_params)),
+                ("xgb", XGBRegressor(**xgb_params)),
+                ("rf", RandomForestRegressor(**rf_params)),
+            ],
+            final_estimator=Ridge(alpha=1.0),
+            cv=3,
+            n_jobs=1,
+        )
+    return Pipeline([("preprocess", build_preprocessor(roles)), ("model", model)])
+
+
 _TEMPLATES: dict[str, PipelineTemplate] = {
     template.template_id: template
     for template in (
@@ -454,6 +648,38 @@ _TEMPLATES: dict[str, PipelineTemplate] = {
             task_types=_ALL_TASKS,
             is_baseline=False,
             build=_build_mlp,
+        ),
+        PipelineTemplate(
+            template_id="stacking_ensemble_default",
+            description="Stacked LightGBM+XGBoost+RF with a linear meta-learner — "
+            "the accuracy ceiling-pusher; slower, use when metrics matter most",
+            task_types=_ALL_TASKS,
+            is_baseline=False,
+            build=_build_stacking,
+        ),
+        PipelineTemplate(
+            template_id="isolation_forest_default",
+            description="Isolation forest — unsupervised anomaly scorer fit on normal "
+            "rows, evaluated against labels; robust default for anomaly detection",
+            task_types=_ANOMALY_ONLY,
+            is_baseline=False,
+            build=_build_isolation_forest,
+        ),
+        PipelineTemplate(
+            template_id="one_class_svm_default",
+            description="One-class SVM — boundary-based novelty detector, "
+            "small/medium data",
+            task_types=_ANOMALY_ONLY,
+            is_baseline=False,
+            build=_build_one_class_svm,
+        ),
+        PipelineTemplate(
+            template_id="local_outlier_factor_default",
+            description="Local outlier factor — density-based novelty detector, "
+            "catches local anomalies globals miss",
+            task_types=_ANOMALY_ONLY,
+            is_baseline=False,
+            build=_build_local_outlier_factor,
         ),
     )
 }

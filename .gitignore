@@ -16,6 +16,12 @@ traces/
 *.sqlite
 benchmarks/data/
 benchmarks/last_results.json
+uploads/
+
+# Node / Next.js dashboard
+dashboard/node_modules/
+dashboard/.next/
+dashboard/next-env.d.ts
 
 # OS / editor
 .DS_Store

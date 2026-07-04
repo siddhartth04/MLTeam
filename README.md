@@ -10,6 +10,12 @@ iterate to improve, and finally package a deployable model with explainability
 and human-readable reports. You stay in control through three approval gates, and
 you watch the whole thing happen live in a mission-control dashboard.
 
+It handles **five task families** — binary / multiclass classification,
+regression, **time-series forecasting** (chronological splits, lag features,
+prediction intervals), and **labeled anomaly detection** (fraud, defects,
+predictive-maintenance failure events) — with a registry of **20 vetted model
+templates** the planner agent chooses from per dataset.
+
 It is built to the standard of a real production system: every decision is a
 typed, logged, reproducible artifact; the evaluation is leakage-proof by
 construction; and nothing ships without a human signing off.
@@ -93,9 +99,17 @@ flowchart TB
 2. **Ingest → Profile → Split** load the data, compute a deterministic profile,
    and carve off a **frozen holdout** that is immediately locked by the store guard.
 3. **Cleaning** and **Feature Engineering** agents propose *whitelisted,
-   justified* operations; deterministic code executes them.
-4. **Experiment Planner** picks vetted pipeline templates and configs — cheap
-   baselines always first. → **Gate 2**: you approve the plan and its cost estimate.
+   justified* operations; deterministic code executes them. The feature executor
+   applies only row-local, fold-safe ops (ratios, differences, log transforms,
+   datetime decomposition, …) and **loudly drops** anything that would learn
+   statistics across CV folds — every drop is recorded with its reason.
+   For forecasting, deterministic lag / rolling / calendar features are added
+   and the holdout becomes the *chronological tail* (never shuffled).
+4. **Experiment Planner** picks from the 20-template registry — gradient
+   boosting (LightGBM/XGBoost/CatBoost), TabPFN, forests, linear/SVM/KNN/NB/MLP,
+   stacked ensembles, dedicated anomaly detectors, seasonal-naive and quantile
+   forecasters — cheap baselines always first. → **Gate 2**: you approve the
+   plan and its cost estimate.
 5. **Training** runs each experiment with cross-validation (preprocessing refit
    *inside every fold*, so no leakage), tuning with **Optuna** (ASHA pruning).
 6. **Evaluation** computes CV metrics, baseline deltas, and leakage detectors —
@@ -119,6 +133,30 @@ wait for your click.
 
 ---
 
+## Task types & model catalog
+
+| Task type | When | Special handling |
+|---|---|---|
+| Binary / multiclass classification | Labeled categories | Stratified splits; ROC-AUC, **PR-AUC**, F1, log-loss |
+| Regression | Numeric target | KFold CV; RMSE/MAE/R² |
+| **Forecasting** | Future values of a time series | Chronological holdout (never shuffled), `TimeSeriesSplit` CV, lag/rolling/calendar features, seasonal-naive floor, quantile intervals |
+| **Anomaly detection** | Rare labeled events (fraud, failures) | PR-AUC headline metric; unsupervised detectors fit on normal rows, scored against labels |
+
+**20 vetted templates** (the LLM picks *which* to run, never writes model code):
+dummy floor · LightGBM · XGBoost · CatBoost · TabPFN v2 · random forest ·
+extra trees · AdaBoost · logistic/ridge linear · SVM · KNN · Gaussian NB · MLP ·
+stacking ensemble · **deep stack** (5 base families + passthrough, AutoGluon-style) ·
+isolation forest · one-class SVM · local outlier factor · **seasonal naive**
+(the honest forecasting floor) · **LightGBM quantile trio** (5/50/95% prediction
+intervals). Optuna search spaces are vetted per-family; the LLM never invents
+ranges.
+
+Predictive-maintenance goals map automatically: *"will it fail within X?"* →
+anomaly / binary classification with cost asymmetry; *"remaining useful life?"*
+→ regression / forecasting.
+
+---
+
 ## Core principles (non-negotiable)
 
 1. **Hub-and-spoke around a typed artifact store** — no prose passed between agents; only typed, validated artifacts.
@@ -139,7 +177,7 @@ wait for your click.
 # Install everything
 uv sync --all-groups
 
-# Run the test suite (177 tests) and the linter
+# Run the test suite (238 tests) and the linter
 uv run pytest
 uv run ruff check .
 ```
@@ -203,7 +241,7 @@ src/mlteam/
   observability/    structured logging, per-run tracing, MLflow wiring
 dashboard/          Next.js + TypeScript Mission Control web app
 benchmarks/         benchmark harness + pinned datasets + reference scores
-tests/              177 tests — unit, integration, end-to-end (no live API needed)
+tests/              238 tests — unit, integration, end-to-end (no live API needed)
 examples/           sample datasets + a runnable example
 ```
 
@@ -212,7 +250,7 @@ examples/           sample datasets + a runnable example
 ## Tech stack
 
 - **Core:** Python 3.11, `uv` (locked deps), Pydantic v2 everywhere, `ruff`, `pytest`.
-- **Data & ML:** Polars + pandas, scikit-learn Pipelines, LightGBM, TabPFN, Optuna (ASHA pruning), SHAP, Pandera, Evidently.
+- **Data & ML:** Polars + pandas, scikit-learn Pipelines, LightGBM, XGBoost, CatBoost, TabPFN, Optuna (ASHA pruning), SHAP, Pandera, Evidently.
 - **LLM:** Anthropic SDK or any LiteLLM provider — every call returns JSON validated against a Pydantic schema, with retry-on-error-feedback and full cost/token/latency tracing.
 - **Orchestration:** a plain-Python iterative loop with budget accounting; Prefect 3 for caching/resumption of the deterministic path.
 - **Serving:** generated FastAPI app that loads the full pipeline and validates inputs with the *same* Pandera schema used in training (kills train/serve skew) + generated Dockerfile.
@@ -232,6 +270,7 @@ examples/           sample datasets + a runnable example
 | **4 — Iteration loop + HPO + sandbox** | Budget-capped Plan→Execute→Evaluate→Critique→Improve loop; Optuna ASHA HPO; a plan-revision agent; `SandboxRunner` (Docker + restricted-subprocess fallback); provider-agnostic LiteLLM. |
 | **5 — Explainability, deployment, reports** | SHAP/PDP/permutation figures; deployment bundle behind Gate 3 (pipeline + Pandera inference schema + FastAPI app + Dockerfile + Evidently drift baseline); Jinja2+Plotly HTML reports (the only holdout reader). |
 | **6 — Mission Control dashboard** | FastAPI read API + live SSE stream + a bespoke Next.js control room: animated agent-flow X-ray, activity feed, experiment leaderboard, lineage explorer, trace timeline, approval gates, inline reports. |
+| **Post-phase expansions** | Model catalog 3 → **20 templates** (XGBoost/CatBoost/forests/linear/SVM/KNN/NB/MLP + stacked & deep-stacked ensembles); **forecasting** task type (temporal splits, lag features, seasonal-naive floor, quantile intervals); **anomaly detection** task type (IsolationForest/OC-SVM/LOF + PR-AUC); the **feature-plan executor** (LLM proposals now execute — row-local fold-safe ops only, stat-learning ops dropped loudly). |
 
 ### Notes & deliberate deviations from the original spec
 

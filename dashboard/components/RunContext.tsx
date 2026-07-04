@@ -23,6 +23,7 @@ export function RunProvider({ children }: { children: ReactNode }) {
     () => ({
       runId,
       setRunId: (id: string) => {
+        // URLSearchParams encodes values; guards against malformed ids in the URL.
         const next = new URLSearchParams(params.toString());
         next.set("run", id);
         router.push(`${pathname}?${next.toString()}`);

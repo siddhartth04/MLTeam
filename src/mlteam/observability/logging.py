@@ -6,6 +6,7 @@ context — machine-parseable for the dashboard's trace viewer.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 
@@ -24,10 +25,9 @@ def configure_logging(level: int = logging.INFO, json_output: bool = True) -> No
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is not None:
-            try:
+            # Stream may be redirected/non-reconfigurable; best-effort only.
+            with contextlib.suppress(ValueError, OSError):  # pragma: no cover
                 reconfigure(encoding="utf-8", errors="replace")
-            except (ValueError, OSError):  # pragma: no cover - stream may be redirected
-                pass
     renderer: structlog.typing.Processor
     if json_output:
         renderer = structlog.processors.JSONRenderer()

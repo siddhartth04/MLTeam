@@ -138,7 +138,16 @@ examples/           sample datasets + goal prompts
   generator is the only component that reads the frozen holdout — and only
   through the store guard's `final_reporting_access` — to report true
   out-of-sample metrics.
-- Phase 6 — Streamlit dashboard
+- **Phase 6 — Mission Control dashboard** ✅: a read-only FastAPI layer
+  (`src/mlteam/api/`) over the artifact store, lineage, and run traces — with a
+  live SSE stream, CSV-upload launch, and the three human-gate actions — plus a
+  bespoke **Next.js + TypeScript** control room (`dashboard/`): an animated
+  hub-and-spoke agent-flow X-ray, a streaming activity feed, the experiment
+  leaderboard, the artifact-lineage explorer, the trace timeline, the approval
+  gates, and inline business/technical reports. Deviates from the spec's
+  Streamlit (deliberately — the live animation needs a real front end).
+  Run: `uv run uvicorn mlteam.api.app:app --port 8000` + `cd dashboard && npm run dev`.
+  See [dashboard/README.md](dashboard/README.md).
 
 ### Environment notes
 

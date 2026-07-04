@@ -96,6 +96,10 @@ export default function ReportPage() {
               key={tab}
               src={reportUrl(reportId, tab)}
               title={`${tab} report`}
+              // The report is our own Jinja2-autoescaped HTML, but sandbox it
+              // as defense-in-depth: scripts (Plotly) and same-origin asset
+              // loads are allowed; forms, popups, and top-nav are not.
+              sandbox="allow-scripts allow-same-origin"
               className="report-frame h-[720px] w-full border-0"
             />
             <div className="mt-3 text-right">

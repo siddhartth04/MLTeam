@@ -1,32 +1,59 @@
 # AI ML Engineering Team
 
-A production-grade agentic platform that behaves like an autonomous ML engineering
-team — not an AutoML tool. Upload a dataset, describe your goal in natural language,
-and an LLM planner coordinates specialized agents that profile, clean, engineer
-features, train, evaluate, critique, iterate, and produce deployment assets and reports.
+**A platform that behaves like an autonomous ML engineering team — not an AutoML tool.**
 
-## Architecture
+You upload a dataset and describe your goal in plain English. A coordinated set
+of specialized LLM agents then does what a careful ML team would: they interpret
+the goal into a precise problem, profile and clean the data, engineer features,
+plan and run experiments, evaluate rigorously, *critique their own results*,
+iterate to improve, and finally package a deployable model with explainability
+and human-readable reports. You stay in control through three approval gates, and
+you watch the whole thing happen live in a mission-control dashboard.
 
-Hub-and-spoke around a typed artifact store. Agents never talk to each other
-directly: every agent is a pure function `typed artifacts in → typed artifacts out`,
-and all handoffs go through the store.
+It is built to the standard of a real production system: every decision is a
+typed, logged, reproducible artifact; the evaluation is leakage-proof by
+construction; and nothing ships without a human signing off.
+
+---
+
+## What makes this different from AutoML
+
+| AutoML tool | This platform |
+|---|---|
+| A black box: data in, model out | A transparent **team of agents**, each a pure function you can inspect |
+| Searches hyperparameters | **Reasons** about the problem, proposes domain features, critiques its own output, and iterates with a plan |
+| You trust the number it prints | A separate **Critic** agent must clear deterministic safety gates before anything is "approved" |
+| Leakage is on you | The holdout set is **frozen at ingestion and physically unreadable** until the final report — enforced at the storage layer, not by convention |
+| No audit trail | Every artifact is **content-addressed with full lineage**; every run has a complete trace |
+| Runs unattended | **Three human gates**: confirm the problem, approve the plan + cost, sign off on deployment |
+
+---
+
+## How it works
+
+The system is organized as a **hub-and-spoke** around a single typed artifact
+store. Agents never talk to each other directly — every agent is a pure function
+of the form `typed artifacts in → typed artifacts out`, and *all* handoffs go
+through the store. This is what makes the system inspectable, resumable, and
+impossible to get into a tangled state.
 
 ```mermaid
 flowchart TB
-    subgraph Gates["Human Gates"]
-        G1["Gate 1: ProblemSpec confirmation"]
-        G2["Gate 2: Training plan + cost approval"]
-        G3["Gate 3: Pre-deployment sign-off"]
+    USER([User: dataset + goal])
+
+    subgraph Orchestration["Orchestrator — run_iterative_pipeline"]
+      direction TB
+      LOOP["Plan → Execute → Evaluate → Critique → Improve<br/>(budget-capped: iterations · wall-time · LLM $)"]
     end
 
-    subgraph Agents
+    subgraph Agents["Agents — pure functions over artifacts"]
         REQ[Requirement Understanding]
         PROF[Dataset Profiling]
         SPLIT[Split Strategist]
         CLEAN[Data Cleaning]
         FEAT[Feature Engineering]
         PLAN[Experiment Planner]
-        TRAIN[Training + Optuna]
+        TRAIN["Training + Optuna HPO"]
         EVAL[Evaluation]
         CRITIC[Critic]
         EXPL[Explainability]
@@ -34,124 +61,187 @@ flowchart TB
         REPORT[Report Generator]
     end
 
-    STORE[("Typed Artifact Store<br/>content-hash addressed<br/>SQLite lineage index<br/>holdout access guard")]
-    ORCH["Prefect Orchestrator<br/>(retries, caching, resumption)"]
-    LLM["Anthropic LLM<br/>(structured JSON only)"]
+    subgraph Gates["Human Gates"]
+        G1["Gate 1<br/>Problem spec"]
+        G2["Gate 2<br/>Plan + cost"]
+        G3["Gate 3<br/>Deployment"]
+    end
 
+    STORE[("TYPED ARTIFACT STORE<br/>content-hash addressed · SQLite lineage<br/>holdout access guard")]
+    LLM["LLM layer<br/>Anthropic or any LiteLLM provider<br/>structured JSON, schema-validated"]
+    SANDBOX["Sandbox<br/>Docker / restricted subprocess<br/>(freeform-code fallback)"]
+    DASH["Mission Control<br/>FastAPI read API + SSE  ·  Next.js dashboard"]
+
+    USER --> Orchestration
+    Orchestration --> Agents
     REQ & PROF & SPLIT & CLEAN & FEAT & PLAN & TRAIN & EVAL & CRITIC & EXPL & DEPLOY & REPORT <--> STORE
-    ORCH --> Agents
-    LLM -.plans / proposes.-> ORCH
+    LLM -. proposes configs / plans .-> Agents
+    Agents -. long-tail code .-> SANDBOX
     REQ --> G1
     PLAN --> G2
     DEPLOY --> G3
-    CRITIC -.iterate-with-actions.-> PLAN
+    CRITIC -. "iterate-with-actions" .-> LOOP
+    STORE <--> DASH
+    DASH -. approve / reject .-> Gates
 ```
 
-Core principles (non-negotiable):
+**A run, step by step:**
 
-1. **Hub-and-spoke around a typed artifact store** — no prose-passing between agents.
-2. **Agents decide, libraries execute** — LLM fills configs for vetted pipeline templates; freeform code is a sandboxed fallback.
-3. **LLM plans, orchestrator runs** — Prefect owns execution, retries, caching, resumption.
-4. **Leakage-proof evaluation** — frozen holdout created at ingestion, unreadable (enforced at store level) until final reporting; all preprocessing fit inside CV folds.
-5. **Everything reproducible** — pinned seeds, uv lockfile, content hashes, full config per run.
-6. **Human gates** at problem spec, training plan, and pre-deployment.
-7. **Every cleaning/transform decision** is a logged, reversible, declarative op with a justification.
+1. **Requirement Understanding** turns your goal + the dataset's columns into a
+   precise `ProblemSpec` (task type, target, primary metric, cost asymmetry).
+   → **Gate 1**: you confirm it.
+2. **Ingest → Profile → Split** load the data, compute a deterministic profile,
+   and carve off a **frozen holdout** that is immediately locked by the store guard.
+3. **Cleaning** and **Feature Engineering** agents propose *whitelisted,
+   justified* operations; deterministic code executes them.
+4. **Experiment Planner** picks vetted pipeline templates and configs — cheap
+   baselines always first. → **Gate 2**: you approve the plan and its cost estimate.
+5. **Training** runs each experiment with cross-validation (preprocessing refit
+   *inside every fold*, so no leakage), tuning with **Optuna** (ASHA pruning).
+6. **Evaluation** computes CV metrics, baseline deltas, and leakage detectors —
+   all deterministic, no LLM.
+7. **Critic** reads *only* the structured evaluation report and issues a verdict:
+   **approve**, **iterate-with-actions**, or **halt**. It cannot approve past a
+   failed hard gate — code overrides it if it tries.
+8. On *iterate*, the **loop** tunes the best model further and asks the planner
+   for new candidates addressing the critique — repeating under an explicit budget.
+9. **Explainability** produces permutation importance, partial-dependence, and
+   SHAP figures (on training data only).
+10. **Deployment** packages the full pipeline + a Pandera inference schema + a
+    generated FastAPI app + Dockerfile + a drift baseline. → **Gate 3**: you sign off.
+11. **Report Generator** — the *only* component allowed to read the frozen
+    holdout, and only through the guard's `final_reporting_access` — computes true
+    out-of-sample metrics and renders business + technical HTML reports.
+
+Throughout, **Mission Control** streams the live state to your browser: agents
+light up as they work, the activity feed scrolls, cost meters tick, and the gates
+wait for your click.
+
+---
+
+## Core principles (non-negotiable)
+
+1. **Hub-and-spoke around a typed artifact store** — no prose passed between agents; only typed, validated artifacts.
+2. **Agents decide, libraries execute** — the LLM selects from vetted, parameterized templates and fills configs; freeform LLM code is a *sandboxed* fallback for the long tail only.
+3. **LLM plans, code runs** — the LLM proposes; a deterministic orchestrator owns execution, the iteration loop, and budget accounting. (Prefect 3 wraps the deterministic path for caching/resumption; it is not the LLM's runtime.)
+4. **Leakage-proof evaluation** — the holdout is created at ingestion and made **unreadable at the storage layer** until the final report; all preprocessing is fit inside CV folds.
+5. **Everything reproducible** — pinned seeds, a uv lockfile, dataset content hashes, and the full config logged per run. Re-running a run gives bit-identical results.
+6. **Human gates** at problem spec, training plan (with cost), and pre-deployment.
+7. **Every cleaning / transform decision** is a logged, reversible, declarative operation with a recorded justification — never a mutation of source data.
+
+---
 
 ## Quickstart
 
+**Requirements:** Python 3.11+ and [uv](https://docs.astral.sh/uv/). Node 18+ only if you want the dashboard.
+
 ```bash
-# Install (Python 3.11+, uv required)
+# Install everything
 uv sync --all-groups
 
-# Run tests
+# Run the test suite (177 tests) and the linter
 uv run pytest
-
-# Lint
 uv run ruff check .
 ```
 
-A full example run (dataset upload → goal → report) lands in later phases; see
-`examples/` as phases complete.
+### Run a full pipeline from the command line
+
+```bash
+uv run python examples/run_example.py
+```
+
+This ingests the example churn dataset, runs the deterministic pipeline
+end-to-end, and prints CV metrics, baseline deltas, and the leakage-check results.
+
+### Run the Mission Control dashboard (the full experience)
+
+Two processes — the API and the web app:
+
+```bash
+# 1. API (from the repo root). Seeds a completed demo run on first start,
+#    so every page is populated immediately — no API key needed.
+uv run uvicorn mlteam.api.app:app --port 8000
+
+# 2. Dashboard (from dashboard/)
+cd dashboard
+npm install        # first time only
+npm run dev        # → http://localhost:3000
+```
+
+Open http://localhost:3000. Launch a run, watch the agents work live, approve at
+the gates, and read the reports. Live runs use Claude if `ANTHROPIC_API_KEY` is
+set; otherwise everything falls back to a recorded fixture, so the whole thing
+works with **no credentials**. See [dashboard/README.md](dashboard/README.md).
+
+### Benchmark regression suite
+
+```bash
+uv run python -m benchmarks.run_benchmarks
+```
+
+Runs the pipeline over 7 pinned datasets and compares against stored reference
+scores — the guardrail that catches any regression from future changes.
+
+---
 
 ## Repository layout
 
 ```
 src/mlteam/
-  contracts/        Pydantic artifact schemas (one module per artifact type)
-  store/            artifact store + SQLite lineage index + holdout guard
-  llm/              Anthropic client wrapper, structured output, cost tracking (Phase 3)
-  agents/           agents as pure functions over artifacts (Phases 1, 3)
-  templates/        registry of vetted pipeline templates (Phase 1)
-  orchestration/    Prefect flows, DAG builder, iteration loop (Phase 1, 4)
-  sandbox/          SandboxRunner for LLM-generated code (Phase 4)
-  evaluation/       metrics, leakage checks, slice analysis (Phase 1)
-  serving/          FastAPI app + Dockerfile generators (Phase 5)
-  reporting/        HTML report builder (Phase 5)
-  dashboard/        Streamlit app (Phase 6)
-  observability/    structured logging, run tracing, MLflow wiring
-benchmarks/         benchmark harness + reference scores (Phase 2)
-tests/              unit + integration tests
-examples/           sample datasets + goal prompts
+  contracts/        Pydantic artifact schemas — the only currency agents exchange
+  store/            content-addressed artifact store + SQLite lineage + holdout guard
+  llm/              structured-output LLM client, cost tracking, transports
+                    (Anthropic SDK, LiteLLM for any provider, fixture replay)
+  agents/           the agents — each a pure function over artifacts
+  templates/        registry of vetted sklearn-pipeline templates
+  evaluation/       metrics, deterministic leakage checks, report assembly
+  orchestration/    the iterative loop, budget accounting, human gates, Prefect flows
+  sandbox/          SandboxRunner for LLM-generated code (Docker + subprocess fallback)
+  serving/          Pandera inference schema, FastAPI app + Dockerfile generators
+  reporting/        Plotly figures + Jinja2 business/technical HTML reports
+  api/              read-only FastAPI over the store + live SSE run stream (dashboard backend)
+  observability/    structured logging, per-run tracing, MLflow wiring
+dashboard/          Next.js + TypeScript Mission Control web app
+benchmarks/         benchmark harness + pinned datasets + reference scores
+tests/              177 tests — unit, integration, end-to-end (no live API needed)
+examples/           sample datasets + a runnable example
 ```
 
-## Build status
+---
 
-- **Phase 0 — Skeleton & contracts** ✅: repo scaffold, all artifact
-  contracts, artifact store with lineage index and holdout guard, MLflow wiring,
-  structured logging + tracing, tests.
-- **Phase 1 — Deterministic tabular pipeline (no LLM)** ✅: ingest → profile →
-  split (frozen holdout) → structural cleaning → dummy/LightGBM/TabPFN baselines
-  (preprocessing inside CV folds) → EvaluationReport with leakage checks, as a
-  Prefect flow with content-based caching. Proven: leaky-fixture detection,
-  holdout-untouched assertion, two-run bit-identical reproducibility.
-  Try it: `uv run python examples/run_example.py`
-- **Phase 2 — Evaluation harness & benchmarks** ✅: 7 pinned datasets
-  (binary/multiclass/regression, imbalanced, datetime), stored reference scores,
-  one-command regression gate: `uv run python -m benchmarks.run_benchmarks`.
-  Scores reproduce with delta +0.0000.
-- **Phase 3 — LLM layer & first agents** ✅: Anthropic client with structured
-  JSON validated against Pydantic schemas (retry with error feedback, max 3),
-  full cost/token/latency tracing per call; fixture record/replay transports
-  (tests never hit the live API). Five agents: Requirement Understanding,
-  Cleaning proposer (whitelisted ops), Feature proposer, Experiment Planner
-  (baselines-first enforced), Critic (deterministic quantitative gates — the
-  LLM can never approve past a failed hard gate). Human gates 1 & 2 wired
-  (Prefect pause / console / auto-approve backends) in `run_agentic_pipeline`.
-- Phase 3 — LLM layer & first agents
-- **Phase 4 — Iteration loop + HPO + sandbox** ✅: budget-capped
-  Plan→Execute→Evaluate→Critique→Improve loop (`run_iterative_pipeline`) with
-  explicit iteration/wall-time/LLM-cost accounting; Optuna HPO with
-  successive-halving (ASHA) pruning over vetted search spaces; a plan-revision
-  agent that proposes new candidates from critique actions; and a
-  `SandboxRunner` for LLM-generated code — Docker (`--network=none`, read-only
-  mounts, resource caps) with a loud restricted-subprocess fallback (scrubbed
-  env, private data copies, process-tree wall-clock kill). Provider-agnostic
-  LLM access via `LiteLLMTransport` (`uv sync --extra litellm`) — the same
-  agents run on any LiteLLM-supported provider.
-- **Phase 5 — Explainability, deployment, reports** ✅: explainability agent
-  (permutation importance + partial dependence + best-effort SHAP → Plotly JSON
-  figure artifacts, on train data only); deployment bundle behind Human Gate 3 —
-  full serialized pipeline + a Pandera inference schema (the *same* one enforced
-  at serving, killing train/serve skew) + a generated FastAPI app + Dockerfile +
-  an Evidently drift baseline; `materialize_bundle` writes a runnable serving
-  directory; and Jinja2+Plotly business/technical HTML reports. The report
-  generator is the only component that reads the frozen holdout — and only
-  through the store guard's `final_reporting_access` — to report true
-  out-of-sample metrics.
-- **Phase 6 — Mission Control dashboard** ✅: a read-only FastAPI layer
-  (`src/mlteam/api/`) over the artifact store, lineage, and run traces — with a
-  live SSE stream, CSV-upload launch, and the three human-gate actions — plus a
-  bespoke **Next.js + TypeScript** control room (`dashboard/`): an animated
-  hub-and-spoke agent-flow X-ray, a streaming activity feed, the experiment
-  leaderboard, the artifact-lineage explorer, the trace timeline, the approval
-  gates, and inline business/technical reports. Deviates from the spec's
-  Streamlit (deliberately — the live animation needs a real front end).
-  Run: `uv run uvicorn mlteam.api.app:app --port 8000` + `cd dashboard && npm run dev`.
-  See [dashboard/README.md](dashboard/README.md).
+## Tech stack
 
-### Environment notes
+- **Core:** Python 3.11, `uv` (locked deps), Pydantic v2 everywhere, `ruff`, `pytest`.
+- **Data & ML:** Polars + pandas, scikit-learn Pipelines, LightGBM, TabPFN, Optuna (ASHA pruning), SHAP, Pandera, Evidently.
+- **LLM:** Anthropic SDK or any LiteLLM provider — every call returns JSON validated against a Pydantic schema, with retry-on-error-feedback and full cost/token/latency tracing.
+- **Orchestration:** a plain-Python iterative loop with budget accounting; Prefect 3 for caching/resumption of the deterministic path.
+- **Serving:** generated FastAPI app that loads the full pipeline and validates inputs with the *same* Pandera schema used in training (kills train/serve skew) + generated Dockerfile.
+- **Dashboard:** FastAPI read API with a live SSE stream + a Next.js / TypeScript / Tailwind / Framer Motion / Plotly control room.
+- **Tracking:** MLflow (local SQLite backend); structured JSON logging + a per-run trace.
 
-- Docker is not available on this development machine; the Phase 4 sandbox will use
-  the documented **restricted-subprocess fallback** (loudly logged). The Docker path
-  is still implemented and auto-selected when Docker is present.
-- Prefect 3.x is used (Prefect 2.x is end-of-life); TabPFN ships as a core dependency.
+---
+
+## Build status — all 6 phases complete ✅
+
+| Phase | What it delivers |
+|---|---|
+| **0 — Skeleton & contracts** | 15 typed artifact contracts, content-addressed store, SQLite lineage, the holdout access guard, logging + tracing. |
+| **1 — Deterministic pipeline (no LLM)** | Ingest → profile → split (frozen holdout) → clean → dummy/LightGBM/TabPFN baselines → evaluation with leakage checks. Proven: leaky-fixture detection, holdout-untouched assertion, two-run bit-identical reproducibility. |
+| **2 — Benchmarks** | One-command regression suite over 7 pinned datasets (binary/multiclass/regression, imbalanced, datetime). Scores reproduce to delta +0.0000. |
+| **3 — LLM layer & agents** | Schema-validated structured-output client with cost tracing + fixture replay; 5 agents (Requirement, Cleaning, Feature, Planner, Critic); human gates 1 & 2. |
+| **4 — Iteration loop + HPO + sandbox** | Budget-capped Plan→Execute→Evaluate→Critique→Improve loop; Optuna ASHA HPO; a plan-revision agent; `SandboxRunner` (Docker + restricted-subprocess fallback); provider-agnostic LiteLLM. |
+| **5 — Explainability, deployment, reports** | SHAP/PDP/permutation figures; deployment bundle behind Gate 3 (pipeline + Pandera inference schema + FastAPI app + Dockerfile + Evidently drift baseline); Jinja2+Plotly HTML reports (the only holdout reader). |
+| **6 — Mission Control dashboard** | FastAPI read API + live SSE stream + a bespoke Next.js control room: animated agent-flow X-ray, activity feed, experiment leaderboard, lineage explorer, trace timeline, approval gates, inline reports. |
+
+### Notes & deliberate deviations from the original spec
+
+- **Dashboard is Next.js + FastAPI, not Streamlit.** The centerpiece is a *live,
+  animated* agent-flow visualization, which Streamlit cannot render well — so the
+  dashboard is a real web front end over a thin read API. (Approved deviation.)
+- **Prefect 3.x** is used (Prefect 2.x is end-of-life). It wraps the deterministic
+  path for caching/resumption; the iterative loop itself is plain Python.
+- **Docker** is optional. When absent, the sandbox uses a documented, loudly-logged
+  restricted-subprocess fallback with resource limits (the Docker path is still
+  implemented and auto-selected when Docker is present).
+- **TabPFN** ships as a core dependency; LiteLLM is an optional extra
+  (`uv sync --extra litellm`).

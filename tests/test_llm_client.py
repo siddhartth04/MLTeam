@@ -123,6 +123,43 @@ def test_pricing_unknown_model_returns_none():
     assert estimate_cost_usd("mystery-model", TokenUsage(input_tokens=100)) is None
 
 
+def test_pricing_prefix_match_resolves_dated_snapshot():
+    # A dated snapshot of a known model still resolves via the prefix match.
+    exact = estimate_cost_usd("claude-sonnet-4-6", TokenUsage(input_tokens=1_000_000))
+    dated = estimate_cost_usd("claude-sonnet-4-6-20251114", TokenUsage(input_tokens=1_000_000))
+    assert dated == exact
+    assert dated is not None
+
+
+def test_pricing_env_override_prices_an_unknown_model(monkeypatch):
+    monkeypatch.setenv("MLTEAM_LLM_PRICE_INPUT_PER_M", "2.5")
+    monkeypatch.setenv("MLTEAM_LLM_PRICE_OUTPUT_PER_M", "10.0")
+    cost = estimate_cost_usd(
+        "gpt-4o-2024-11-20", TokenUsage(input_tokens=1_000_000, output_tokens=1_000_000)
+    )
+    assert cost == pytest.approx(2.5 + 10.0)
+
+
+def test_pricing_env_override_ignored_for_known_models(monkeypatch):
+    # The table takes precedence; the override is only a fallback.
+    monkeypatch.setenv("MLTEAM_LLM_PRICE_INPUT_PER_M", "999.0")
+    monkeypatch.setenv("MLTEAM_LLM_PRICE_OUTPUT_PER_M", "999.0")
+    cost = estimate_cost_usd("claude-haiku-4-5", TokenUsage(input_tokens=1_000_000))
+    assert cost == pytest.approx(1.00)  # the table's real haiku rate, not 999
+
+
+def test_pricing_malformed_env_override_falls_back_to_none(monkeypatch):
+    monkeypatch.setenv("MLTEAM_LLM_PRICE_INPUT_PER_M", "not-a-number")
+    monkeypatch.setenv("MLTEAM_LLM_PRICE_OUTPUT_PER_M", "10.0")
+    assert estimate_cost_usd("mystery-model", TokenUsage(input_tokens=100)) is None
+
+
+def test_pricing_unknown_model_without_override_still_none(monkeypatch):
+    monkeypatch.delenv("MLTEAM_LLM_PRICE_INPUT_PER_M", raising=False)
+    monkeypatch.delenv("MLTEAM_LLM_PRICE_OUTPUT_PER_M", raising=False)
+    assert estimate_cost_usd("totally-unknown-model", TokenUsage(input_tokens=100)) is None
+
+
 def test_schema_sanitizer_strips_unsupported_constraints():
     schema = output_schema_for(Answer)
     text = json.dumps(schema)

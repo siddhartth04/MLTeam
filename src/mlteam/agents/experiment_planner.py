@@ -72,6 +72,28 @@ winning template earlier) — they may NEVER cause you to skip the mandatory \
 baselines, drop a candidate family without recording it in excluded_templates, \
 or treat a past winner as guaranteed; every planned experiment is still \
 evaluated on ITS OWN merits against this run's data.
+- screening_results are dummy_baseline/linear_default/lightgbm_default ALREADY \
+trained on THIS dataset — real evidence, not a prior. Read them as diagnostic \
+instruments, not competitors:
+  * linear_default close to lightgbm_default → signal is mostly linear: prefer a \
+  regularized linear model plus one strong GBDT; a deep stack is unlikely to earn \
+  its cost here.
+  * linear_default near dummy_baseline while lightgbm_default is clearly better → \
+  nonlinear/interaction-heavy signal: prioritize the GBDT family and \
+  stacking_ensemble_default/stacking_deep_default; mlp_default only if rows are \
+  numerous and the data is dense-numeric (not heavily categorical).
+  * linear_default OR lightgbm_default scores near-perfect (e.g. roc_auc/accuracy \
+  > 0.995, or r2 > 0.995) → treat this as a LEAKAGE ALARM, not a win: say so \
+  explicitly in rationale and keep the plan modest — do not schedule a large, \
+  expensive candidate slate chasing a score that is probably too good to be true \
+  (the Critic's hard gates will also check this, but flag it here first).
+  * skip svm_default/knn_default above ~20k rows (their cost or quality degrades \
+  quadratically); skip mlp_default under ~10k rows or when the profile is heavily \
+  categorical — trees dominate there.
+  * dummy_baseline and lightgbm_default specs you plan with EMPTY config reuse \
+  the screening run outright (zero extra training cost) — this is a reason to \
+  prefer the vetted default config for those two slots unless the profile clearly \
+  demands otherwise.
 Return only JSON matching the schema."""
 
 # Rough wall-time heuristics (seconds) per 1k rows, by template.
@@ -257,6 +279,7 @@ def plan_experiments(
     n_rows: int,
     run_id: str,
     store_root: Path | None = None,
+    screening_results: list[dict[str, Any]] | None = None,
 ) -> ExperimentPlan:
     """Draft, validate, and store an ExperimentPlan (unapproved until Gate 2).
 
@@ -265,6 +288,11 @@ def plan_experiments(
     ledger and included in the LLM payload so the planner can reorder
     candidates on experience — never to skip baselines or coverage, which
     stay code-enforced by the plan validator regardless of what the priors say.
+
+    ``screening_results``, when given, are this run's own cheap probes
+    (dummy/linear/lightgbm, already trained) — real evidence from THIS
+    dataset, stronger than any cross-run prior, that conditions the real
+    candidate slate instead of planning blind.
     """
     registry = [
         {"template_id": t.template_id, "description": t.description}
@@ -323,6 +351,7 @@ def plan_experiments(
                 }
                 for p in priors
             ],
+            "screening_results": screening_results or [],
         },
         schema=ExperimentPlanDraft,
         post_validate=_post_validate,

@@ -24,7 +24,7 @@ from mlteam.agents.cleaner import (
     propose_cleaning_ops_llm,
 )
 from mlteam.agents.critic import critique_evaluation
-from mlteam.agents.experiment_planner import plan_experiments
+from mlteam.agents.experiment_planner import estimate_budget, plan_experiments
 from mlteam.agents.feature_engineer import propose_features
 from mlteam.agents.feature_executor import execute_feature_plan
 from mlteam.agents.ingest import ingest_file
@@ -37,7 +37,7 @@ from mlteam.agents.trainer import compute_env_hash
 from mlteam.agents.triage import triage_dataset
 from mlteam.contracts import CritiqueReport, ExperimentSpec, ProblemSpec, TaskType
 from mlteam.evaluation.report import build_evaluation_report
-from mlteam.evaluation.results import TrainResult
+from mlteam.evaluation.results import TrainResult, list_experiment_outcomes
 from mlteam.llm.client import LLMClient, LLMValidationError
 from mlteam.orchestration.gates import ApprovalGate, GateName, require_approval
 from mlteam.orchestration.pipeline import (
@@ -92,6 +92,70 @@ def _check_experiment_quorum(
             hint="fewer than half the planned experiments completed; check the "
             "leaderboard for FAILED outcomes before trusting the winner",
         )
+
+
+# Cheap probes the planner reads BEFORE choosing the real candidate slate.
+# dummy_baseline and lightgbm_default reuse straight into the Gate-2 plan (via
+# _train_all's reuse-by-identical-key check) whenever the plan keeps their
+# config as the vetted default, so screening is close to free in wall time.
+_SCREENING_TEMPLATES = ("dummy_baseline", "linear_default", "lightgbm_default")
+
+
+def _run_screening(
+    store: GuardedArtifactStore,
+    dataset_id: str,
+    *,
+    task_type: TaskType,
+    primary_metric: str,
+    n_rows: int,
+    run_id: str,
+    seed: int,
+    n_folds: int,
+    env_hash: str,
+    mlflow_enabled: bool,
+) -> list[dict[str, object]]:
+    """Train the cheap probe trio and return their results as plain dicts for
+    the planner payload. Never raises for a non-dummy probe failure — a
+    linear-model failure (e.g. all-categorical data) is itself informative
+    and simply produces one fewer screening result, not a broken run."""
+    specs = tuple(
+        ExperimentSpec(
+            experiment_id=f"screen-{template.replace('_default', '').replace('_baseline', '')}",
+            template_id=template,
+            budget=estimate_budget(template, n_rows),
+            is_baseline=(template == "dummy_baseline"),
+        )
+        for template in _SCREENING_TEMPLATES
+    )
+    _results, _skipped = _train_all(
+        store,
+        dataset_id,
+        specs,
+        task_type=task_type,
+        run_id=run_id,
+        seed=seed,
+        n_folds=n_folds,
+        env_hash=env_hash,
+        mlflow_enabled=mlflow_enabled,
+    )
+    screen_ids = {s.experiment_id for s in specs}
+    outcomes = [
+        o for o in list_experiment_outcomes(store, run_id) if o.experiment_id in screen_ids
+    ]
+    return [
+        {
+            "template": o.template_id,
+            "primary_metric_mean": next(
+                (round(m.mean, 6) for m in o.cv_metrics if m.name == primary_metric), None
+            ),
+            "primary_metric_std": next(
+                (round(m.std, 6) for m in o.cv_metrics if m.name == primary_metric), None
+            ),
+            "wall_time_seconds": round(o.wall_time_seconds, 2),
+            "state": o.state.value,
+        }
+        for o in outcomes
+    ]
 
 
 @dataclass(frozen=True)
@@ -246,6 +310,27 @@ def run_agentic_pipeline(
     except LLMValidationError as exc:
         _log.warning("feature_proposer_skipped", error=str(exc))
 
+    # -- Screening round: cheap probes BEFORE the plan is drafted -------------
+    # A senior engineer runs cheap probes first, reads them, then spends the
+    # budget — the planner used to choose blind. dummy/linear/lightgbm here
+    # use the SAME env_hash as the real training call below, so the plan's
+    # dummy_baseline/lightgbm_default specs reuse these results outright
+    # (via _train_all's identical-key check) whenever the plan keeps their
+    # vetted defaults, at zero additional training cost.
+    env_hash = compute_env_hash()
+    screening_results = _run_screening(
+        store,
+        modeling_dataset.meta.artifact_id,
+        task_type=spec.task_type,
+        primary_metric=spec.primary_metric,
+        n_rows=modeling_dataset.n_rows,
+        run_id=run_id,
+        seed=seed,
+        n_folds=n_folds,
+        env_hash=env_hash,
+        mlflow_enabled=mlflow_enabled,
+    )
+
     # -- LLM experiment plan + GATE 2 ----------------------------------------
     try:
         plan = plan_experiments(
@@ -256,6 +341,7 @@ def run_agentic_pipeline(
             n_rows=modeling_dataset.n_rows,
             run_id=run_id,
             store_root=store.root,
+            screening_results=screening_results,
         )
         specs = plan.experiments
         plan_rationale = plan.rationale
@@ -288,6 +374,7 @@ def run_agentic_pipeline(
             "excluded_templates": [
                 {"template_id": e.template_id, "reason": e.reason} for e in excluded_templates
             ],
+            "screening_results": screening_results,
             "data_triage": {
                 "rows_before": triage_report.rows_before,
                 "rows_after": triage_report.rows_after,
@@ -308,7 +395,7 @@ def run_agentic_pipeline(
         run_id=run_id,
         seed=seed,
         n_folds=n_folds,
-        env_hash=compute_env_hash(),
+        env_hash=env_hash,
         mlflow_enabled=mlflow_enabled,
     )
     dummy_key = _dummy_key(tuple(specs))

@@ -10,6 +10,7 @@ influences modeling.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -25,18 +26,55 @@ from mlteam.agents.trainer import TrainResult, compute_env_hash, train_experimen
 from mlteam.contracts import (
     BudgetEstimate,
     EvaluationReport,
+    ExperimentOutcome,
     ExperimentPlan,
     ExperimentSpec,
     ExperimentState,
     TaskType,
+    TrainedModel,
     new_artifact,
 )
 from mlteam.evaluation.metrics import better_than
 from mlteam.evaluation.report import build_evaluation_report
-from mlteam.evaluation.results import store_experiment_outcome
+from mlteam.evaluation.results import list_experiment_outcomes, store_experiment_outcome
 from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
+
+
+def _reuse_key(dataset_id: str, seed: int, env_hash: str, spec: ExperimentSpec) -> str:
+    """Identity key for 'would training this spec again produce a bit-identical
+    model?' — same template, config, dataset, seed, and dependency lock all
+    determine the trained model, so all five must match to safely reuse."""
+    return json.dumps(
+        {
+            "template_id": spec.template_id,
+            "config": spec.config,
+            "dataset_id": dataset_id,
+            "seed": seed,
+            "env_hash": env_hash,
+        },
+        sort_keys=True,
+    )
+
+
+def _completed_outcomes_by_key(
+    store: GuardedArtifactStore, run_id: str, dataset_id: str, seed: int, env_hash: str
+) -> dict[str, ExperimentOutcome]:
+    """Every COMPLETED outcome already recorded THIS run, keyed by _reuse_key
+    of the ExperimentSpec that would reproduce it bit-for-bit."""
+    lookup: dict[str, ExperimentOutcome] = {}
+    for outcome in list_experiment_outcomes(store, run_id):
+        if outcome.state is not ExperimentState.COMPLETED or outcome.model_ref is None:
+            continue
+        fake_spec = ExperimentSpec(
+            experiment_id=outcome.experiment_id,
+            template_id=outcome.template_id,
+            config=outcome.config,
+            budget=BudgetEstimate(wall_time_seconds=0.0),
+        )
+        lookup[_reuse_key(dataset_id, seed, env_hash, fake_spec)] = outcome
+    return lookup
 
 _DUMMY = "dummy_baseline"
 
@@ -120,23 +158,46 @@ def _train_all(
     template (e.g. default and tuned LightGBM). Every spec, success or
     failure, is persisted as an ExperimentOutcome so the leaderboard can
     show the whole field, not just the survivors.
+
+    Before training, each spec is checked against every COMPLETED outcome
+    already recorded this run (e.g. from the Phase 9 screening round): same
+    template + config + dataset + seed + env_hash reproduces a bit-identical
+    model, so it is reused instead of retrained — the plan's dummy_baseline
+    and lightgbm_default specs typically hit this after screening, at zero
+    additional training cost. A reused spec still gets its own
+    ExperimentOutcome (so the leaderboard shows it under ITS experiment_id),
+    just with wall_time_seconds=0 and a log line marking the reuse.
     """
+    reusable = _completed_outcomes_by_key(store, run_id, dataset_id, seed, env_hash)
     results: dict[str, TrainResult] = {}
     skipped: list[tuple[str, str]] = []
     for spec in specs:
         started = time.monotonic()
+        reused = reusable.get(_reuse_key(dataset_id, seed, env_hash, spec))
         try:
-            result = train_experiment(
-                store,
-                dataset_id,
-                spec,
-                task_type=task_type,
-                run_id=run_id,
-                seed=seed,
-                n_folds=n_folds,
-                env_hash=env_hash,
-                mlflow_enabled=mlflow_enabled,
-            )
+            if reused is not None:
+                model: TrainedModel = store.get(reused.model_ref.artifact_id)
+                result = TrainResult(
+                    model=model, metrics={m.name: m for m in reused.cv_metrics}
+                )
+                _log.info(
+                    "experiment_reused",
+                    experiment_id=spec.experiment_id,
+                    template=spec.template_id,
+                    reused_from=reused.experiment_id,
+                )
+            else:
+                result = train_experiment(
+                    store,
+                    dataset_id,
+                    spec,
+                    task_type=task_type,
+                    run_id=run_id,
+                    seed=seed,
+                    n_folds=n_folds,
+                    env_hash=env_hash,
+                    mlflow_enabled=mlflow_enabled,
+                )
             results[spec.experiment_id] = result
             store_experiment_outcome(
                 store,
@@ -145,7 +206,7 @@ def _train_all(
                 state=ExperimentState.COMPLETED,
                 run_id=run_id,
                 result=result,
-                wall_time_seconds=time.monotonic() - started,
+                wall_time_seconds=0.0 if reused is not None else time.monotonic() - started,
             )
         except Exception as exc:
             store_experiment_outcome(

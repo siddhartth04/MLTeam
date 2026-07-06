@@ -43,7 +43,13 @@ results. You never see raw data — judge only the evidence provided.
 Verdict rules (the orchestrator enforces these; violating them gets overridden):
 - If any leakage check failed or the holdout was touched: verdict MUST be halt.
 - If the model does not beat the dummy baseline significantly on the primary \
-metric: verdict MUST be iterate_with_actions, with concrete actions.
+metric: verdict MUST be iterate_with_actions, with concrete actions. Each \
+baseline_delta carries significance_method: "nadeau_bengio_paired_t" means \
+`significant` came from a real corrected paired t-test over per-fold deltas \
+(p_value is populated) — cite the p-value in your finding. \
+"heuristic_2sigma" means fold pairing was unavailable and a documented \
+pooled-std heuristic was used instead — say so explicitly rather than \
+implying a real test ran.
 - If the terminal-state audit reports incomplete (a planned experiment has no \
 outcome): verdict MUST be halt — this is an orchestration bug, not a model- \
 quality question, and must be fixed before anything is trusted.

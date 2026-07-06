@@ -127,6 +127,7 @@ def run_iterative_pipeline(
     primary = spec.primary_metric
     run_id = initial.run_id
     dataset_id = initial.pipeline.modeling_dataset_id
+    n_rows = store.get(dataset_id).n_rows
     env_hash = compute_env_hash()
 
     results: dict[str, TrainResult] = dict(initial.pipeline.train_results)
@@ -245,6 +246,7 @@ def run_iterative_pipeline(
             dummy_result=results[dummy_key],
             profile=train_profile,
             primary_metric=primary,
+            n_rows=n_rows,
         )
         # No terminal-state audit here: the "planned" set is this iteration's
         # dynamically-revised candidates, not a fixed plan to check completeness

@@ -33,6 +33,21 @@ class BaselineDelta(BaseModel):
     significant: bool | None = Field(
         default=None, description="Whether the improvement passes the significance check"
     )
+    p_value: float | None = Field(
+        default=None,
+        description=(
+            "One-sided p-value from the paired Nadeau-Bengio corrected "
+            "resampled t-test over per-fold deltas, when the model and "
+            "baseline were scored on identical folds. None when fold "
+            "pairing was unavailable (fold counts differ, or fewer than 2 "
+            "folds) -- ``significant`` then falls back to a documented "
+            "heuristic instead of a real test."
+        ),
+    )
+    significance_method: str = Field(
+        default="none",
+        description="'nadeau_bengio_paired_t' when p_value was computed, else 'heuristic_2sigma'",
+    )
 
 
 class SliceMetric(BaseModel):

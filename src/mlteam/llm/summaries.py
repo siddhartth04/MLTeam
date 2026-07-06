@@ -78,6 +78,8 @@ def evaluation_summary(report: EvaluationReport) -> dict[str, Any]:
                 "model_value": round(d.model_value, 6),
                 "delta": round(d.delta, 6),
                 "significant": d.significant,
+                "p_value": d.p_value,
+                "significance_method": d.significance_method,
             }
             for d in report.baseline_deltas
         ],

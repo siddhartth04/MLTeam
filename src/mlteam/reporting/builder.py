@@ -193,6 +193,8 @@ def build_final_report(
                 "model_value": f"{d.model_value:.4f}",
                 "delta": f"{d.delta:+.4f}",
                 "significant": d.significant,
+                "significance_method": d.significance_method,
+                "p_value": None if d.p_value is None else round(d.p_value, 4),
             }
             for d in inputs.evaluation.baseline_deltas
         ],
@@ -257,8 +259,17 @@ def _headline_sentence(inputs: ReportInputs, holdout_metrics: list[dict[str, Any
     delta = next((d for d in inputs.evaluation.baseline_deltas if d.metric == primary), None)
     if hp is None or delta is None:
         return "See the metrics below for measured performance."
-    verb = "significantly outperforms" if delta.significant else "improves on"
+    # "significantly outperforms" is only used when a real statistical test
+    # (the paired Nadeau-Bengio corrected t-test) actually ran and passed —
+    # the heuristic fallback path says "improves on" even when it judged the
+    # gap significant, since it is a documented rule of thumb, not a test.
+    if delta.significant and delta.significance_method == "nadeau_bengio_paired_t":
+        verb = "significantly outperforms"
+        p_clause = f" (p={delta.p_value:.4f})" if delta.p_value is not None else ""
+    else:
+        verb = "improves on"
+        p_clause = ""
     return (
         f"On held-out data the model scores {hp['value']:.3f} on {primary}, and it "
-        f"{verb} a naive baseline ({delta.baseline_value:.3f} → {delta.model_value:.3f})."
+        f"{verb} a naive baseline ({delta.baseline_value:.3f} → {delta.model_value:.3f}){p_clause}."
     )

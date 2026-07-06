@@ -115,11 +115,13 @@ _TECHNICAL_TEMPLATE = """<!doctype html>
 {% else %}<p class="muted">Holdout metrics unavailable.</p>{% endif %}
 
 <h2>Baseline deltas</h2>
-<table><tr><th>Baseline</th><th>Metric</th><th>Baseline</th><th>Model</th><th>Delta</th><th>Significant</th></tr>
+<table><tr><th>Baseline</th><th>Metric</th><th>Baseline</th><th>Model</th><th>Delta</th><th>Significant</th><th>Test</th></tr>
 {% for d in baseline_deltas %}
 <tr><td>{{ d.baseline }}</td><td>{{ d.metric }}</td><td>{{ d.baseline_value }}</td>
 <td>{{ d.model_value }}</td><td>{{ d.delta }}</td>
-<td class="{{ 'pass' if d.significant else 'muted' }}">{{ d.significant }}</td></tr>
+<td class="{{ 'pass' if d.significant else 'muted' }}">{{ d.significant }}</td>
+<td class="muted">{{ d.significance_method }}{% if d.p_value is not none %}
+ (p={{ d.p_value }}){% endif %}</td></tr>
 {% endfor %}</table>
 
 <h2>Leakage checks</h2>

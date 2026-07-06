@@ -40,12 +40,19 @@ class FailureCensus:
 
 @dataclass(frozen=True)
 class WinnerMargin:
-    """Separation between the winner and its closest competitor, expressed in
-    units of pooled fold standard deviation — not just the raw metric gap.
-    A raw gap of 0.02 means very different things at std=0.001 (huge, real
-    separation) versus std=0.05 (statistical noise); the _stds fields make
-    that distinction explicit. Always positive when the winner really is
-    better, regardless of the metric's own direction."""
+    """Separation between the winner and its closest competitor, expressed as
+    a pooled-sigma EFFECT SIZE (raw gap / sqrt(mean of the two variances)) —
+    not just the raw metric gap, and NOT a significance test. A raw gap of
+    0.02 means very different things at std=0.001 (huge, real separation)
+    versus std=0.05 (statistical noise); the _stds fields make that
+    distinction explicit. Always positive when the winner really is better,
+    regardless of the metric's own direction. This is the SAME pooled-sigma
+    convention BaselineDelta's heuristic fallback uses (sqrt of the MEAN of
+    the two variances) — the two numbers are directly comparable. For an
+    actual test with a p-value, see BaselineDelta.p_value
+    (evaluation/stats.py's paired Nadeau-Bengio test) — this module doesn't
+    compute p-values because it only ever sees a single mean+std per
+    experiment, not the underlying per-fold sequence."""
 
     runner_up_template: str | None
     vs_runner_up_raw: float | None

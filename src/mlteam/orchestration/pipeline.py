@@ -355,6 +355,7 @@ def run_tabular_pipeline(
         dummy_result=results[dummy_key],
         profile=train_profile,
         primary_metric=primary_metric,
+        n_rows=cleaned.n_rows,
     )
     return PipelineResult(
         run_id=run_id,

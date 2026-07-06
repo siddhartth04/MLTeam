@@ -71,9 +71,15 @@ def to_natural_sign(metric: str, sklearn_scorer: str, values: list[float]) -> li
 
 
 def summarize_folds(name: str, fold_values: list[float]) -> MetricSummary:
+    """Summarize per-fold scores. Uses the sample standard deviation
+    (Bessel's correction, ddof=1): fold_values are a SAMPLE of possible CV
+    partitions, and the whole point of reporting fold std is to describe
+    the *uncertainty* in the estimate from having observed only k of them —
+    the population-variance (ddof=0) formula understates that uncertainty
+    by a factor of sqrt((k-1)/k), which is a ~18% understatement at k=3."""
     n = len(fold_values)
     mean = sum(fold_values) / n
-    variance = sum((v - mean) ** 2 for v in fold_values) / n
+    variance = 0.0 if n < 2 else sum((v - mean) ** 2 for v in fold_values) / (n - 1)
     return MetricSummary(
         name=name,
         fold_values=tuple(round(v, 10) for v in fold_values),

@@ -160,8 +160,9 @@ export interface DossierComparisonRow {
 }
 
 export interface DossierWinnerMargin {
-  vs_runner_up: { template_id: string; improvement: number } | null;
+  vs_runner_up: { template_id: string; improvement: number; improvement_stds: number | null } | null;
   vs_dummy: number | null;
+  vs_dummy_stds: number | null;
 }
 
 export interface DossierTopFeature {
@@ -174,11 +175,21 @@ export interface DossierCritique {
   findings: { severity: string; category: string; evidence: string }[];
 }
 
+export interface DossierFieldChecks {
+  terminal_state_complete: boolean;
+  missing_experiment_ids: string[];
+  failed_count: number;
+  skipped_count: number;
+  failure_reasons: string[];
+  total_wall_time_seconds: number;
+}
+
 export interface DeploymentDossier {
   comparison: DossierComparisonRow[];
   winner_margin: DossierWinnerMargin | null;
   top_features: DossierTopFeature[];
   critique: DossierCritique | null;
+  field_checks: DossierFieldChecks | null;
   lineage: { model_id: string; dataset_id: string; split_plan_id: string | null };
 }
 

@@ -274,6 +274,18 @@ function DossierBlock({
               <span className="font-mono text-ink">
                 +{dossier.winner_margin.vs_runner_up.improvement.toFixed(4)}
               </span>
+              {dossier.winner_margin.vs_runner_up.improvement_stds != null && (
+                <span
+                  className={
+                    dossier.winner_margin.vs_runner_up.improvement_stds < 0.5
+                      ? "ml-1.5 text-warn"
+                      : "ml-1.5 text-ink-faint"
+                  }
+                >
+                  ({dossier.winner_margin.vs_runner_up.improvement_stds.toFixed(2)} pooled-std
+                  {dossier.winner_margin.vs_runner_up.improvement_stds < 0.5 ? " — near tie" : ""})
+                </span>
+              )}
             </span>
           )}
           {dossier.winner_margin.vs_dummy != null && (
@@ -283,6 +295,37 @@ function DossierBlock({
                 +{dossier.winner_margin.vs_dummy.toFixed(4)}
               </span>
             </span>
+          )}
+        </div>
+      )}
+
+      {dossier.field_checks && (
+        <div className="mt-4 rounded-lg border border-base-600/50 p-3 text-sm">
+          <div className="label-eyebrow mb-2">Field checks</div>
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-ink-muted">
+            <span>
+              Terminal states:{" "}
+              <span className={dossier.field_checks.terminal_state_complete ? "text-ok" : "text-danger"}>
+                {dossier.field_checks.terminal_state_complete ? "complete" : "INCOMPLETE"}
+              </span>
+            </span>
+            <span>
+              Failed: <span className="font-mono text-ink">{dossier.field_checks.failed_count}</span>
+            </span>
+            <span>
+              Skipped: <span className="font-mono text-ink">{dossier.field_checks.skipped_count}</span>
+            </span>
+            <span>
+              Total wall time:{" "}
+              <span className="font-mono text-ink">
+                {dossier.field_checks.total_wall_time_seconds.toFixed(1)}s
+              </span>
+            </span>
+          </div>
+          {dossier.field_checks.missing_experiment_ids.length > 0 && (
+            <p className="mt-2 text-danger">
+              Missing outcomes: {dossier.field_checks.missing_experiment_ids.join(", ")}
+            </p>
           )}
         </div>
       )}

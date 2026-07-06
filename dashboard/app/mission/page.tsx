@@ -117,6 +117,24 @@ export default function MissionPage() {
               <div className="flex items-center gap-3">
                 <VerdictInline verdict={critique.verdict} />
               </div>
+              {critique.findings.length > 0 && (
+                <ul className="mt-3 space-y-2 text-sm">
+                  {critique.findings.map((f, i) => (
+                    <li key={i} className="rounded-lg bg-base-800/50 p-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-wide text-accent-bright">
+                          {f.severity}
+                        </span>
+                        <span className="text-[11px] text-ink-faint">{f.category}</span>
+                      </div>
+                      <p className="mt-1 text-ink-muted">{f.evidence}</p>
+                      {f.recommendation && (
+                        <p className="mt-1 text-ink-faint">→ {f.recommendation}</p>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
               {critique.iteration_actions.length > 0 && (
                 <ul className="mt-3 space-y-1.5 text-sm text-ink-muted">
                   {critique.iteration_actions.map((a, i) => (

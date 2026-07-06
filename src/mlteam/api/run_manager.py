@@ -74,6 +74,19 @@ def _record_ledger_outcome(
         _log.warning("ledger_write_skipped", exc_info=True)
 
 
+def _planned_experiment_ids(store: ArtifactStore, pipeline: PipelineResult) -> tuple[str, ...]:
+    """Screening ids + the initial plan's spec ids, for the Gate 3 dossier's
+    terminal-state audit. Empty (no audit surfaced) when the LLM planner fell
+    back to the deterministic default plan, which has no stored ExperimentPlan
+    artifact to read specs from."""
+    from mlteam.orchestration.agentic import screening_experiment_ids
+
+    if not pipeline.experiment_plan_id:
+        return ()
+    plan = store.get(pipeline.experiment_plan_id)
+    return screening_experiment_ids() + tuple(s.experiment_id for s in plan.experiments)
+
+
 class RegistryGate:
     """ApprovalGate that surfaces gates in the dashboard and blocks on approval."""
 
@@ -239,6 +252,7 @@ def _execute(
                 evaluation=result.final_report,
                 explainability=explain_report,
                 critique=result.final_critique,
+                planned_experiment_ids=_planned_experiment_ids(store, pipeline),
             )
             stage(Stage.DEPLOY, StageStatus.DONE)
             note("Deployment bundle signed off", level="success", s=Stage.DEPLOY)

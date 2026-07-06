@@ -86,3 +86,10 @@ def better_than(metric: str, candidate: float, reference: float) -> bool:
     if is_higher_better(metric):
         return candidate > reference
     return candidate < reference
+
+
+def signed_improvement(metric: str, better: float, worse: float) -> float:
+    """Positive whenever ``better`` actually is better, regardless of the
+    metric's own direction — so a caller never has to remember which metrics
+    are higher-is-better to display an intuitive margin."""
+    return (better - worse) if is_higher_better(metric) else (worse - better)

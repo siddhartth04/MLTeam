@@ -28,7 +28,7 @@ from mlteam.contracts import (
 )
 from mlteam.evaluation.metrics import better_than
 from mlteam.evaluation.report import build_evaluation_report
-from mlteam.evaluation.results import store_experiment_outcome
+from mlteam.evaluation.results import list_experiment_outcomes, store_experiment_outcome
 from mlteam.llm.client import LLMClient, LLMValidationError
 from mlteam.orchestration.agentic import AgenticResult, run_agentic_pipeline
 from mlteam.orchestration.budget import BudgetTracker, RunBudget
@@ -238,8 +238,20 @@ def run_iterative_pipeline(
             profile=train_profile,
             primary_metric=primary,
         )
+        # No terminal-state audit here: the "planned" set is this iteration's
+        # dynamically-revised candidates, not a fixed plan to check completeness
+        # against (that check applies to the initial full plan, already done
+        # in agentic.py). Outcomes and the winner/dummy margin are still real,
+        # complete evidence and enrich the re-critique regardless.
         critique = critique_evaluation(
-            client, store, report=report, primary_metric=primary, run_id=run_id
+            client,
+            store,
+            report=report,
+            primary_metric=primary,
+            run_id=run_id,
+            outcomes=list_experiment_outcomes(store, run_id),
+            winner_experiment_id=best_now,
+            dummy_experiment_id=dummy_key,
         )
         records.append(
             IterationRecord(

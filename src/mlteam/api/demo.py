@@ -142,6 +142,8 @@ def seed_demo_run(
             if c != spec.target_column
         ]
         stage(Stage.DEPLOY, StageStatus.ACTIVE)
+        from mlteam.api.run_manager import _planned_experiment_ids
+
         build_deployment_bundle(
             store,
             model=result.best_model,
@@ -156,6 +158,7 @@ def seed_demo_run(
             evaluation=result.final_report,
             explainability=explain_report,
             critique=result.final_critique,
+            planned_experiment_ids=_planned_experiment_ids(store, pipeline),
         )
         stage(Stage.DEPLOY, StageStatus.DONE)
 

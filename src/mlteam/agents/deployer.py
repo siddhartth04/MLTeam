@@ -27,7 +27,13 @@ from mlteam.contracts import (
     TrainedModel,
     new_artifact,
 )
-from mlteam.evaluation.metrics import is_higher_better
+from mlteam.evaluation.field_checks import (
+    audit_terminal_states,
+    compute_cost_census,
+    compute_failure_census,
+    compute_winner_margin,
+)
+from mlteam.evaluation.metrics import is_higher_better, signed_improvement
 from mlteam.orchestration.gates import ApprovalGate, GateName, require_approval
 from mlteam.serving.app_template import render_app
 from mlteam.serving.dockerfile import render_dockerfile, render_requirements
@@ -43,13 +49,6 @@ def _metric_mean(outcome: ExperimentOutcome, metric: str) -> float | None:
     return next((m.mean for m in outcome.cv_metrics if m.name == metric), None)
 
 
-def _signed_improvement(metric: str, better: float, worse: float) -> float:
-    """Positive whenever ``better`` actually is better, regardless of the
-    metric's own direction (so a dossier reader never has to remember which
-    metrics are higher-is-better)."""
-    return (better - worse) if is_higher_better(metric) else (worse - better)
-
-
 def build_deployment_dossier(
     *,
     model: TrainedModel,
@@ -60,6 +59,7 @@ def build_deployment_dossier(
     evaluation: EvaluationReport | None = None,
     explainability: ExplainabilityReport | None = None,
     critique: CritiqueReport | None = None,
+    planned_experiment_ids: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Assemble the evidence a human needs to answer "why trust this model?"
 
@@ -112,16 +112,42 @@ def build_deployment_dossier(
             runner_up_value = _metric_mean(runner_up, primary)
             vs_runner_up = {
                 "template_id": runner_up.template_id,
-                "improvement": _signed_improvement(primary, winner_value, runner_up_value),
+                "improvement": signed_improvement(primary, winner_value, runner_up_value),
             }
         vs_dummy = None
         if dummy is not None:
             dummy_value = _metric_mean(dummy, primary)
             if dummy_value is not None:
-                vs_dummy = _signed_improvement(primary, winner_value, dummy_value)
+                vs_dummy = signed_improvement(primary, winner_value, dummy_value)
         winner_margin = {
             "vs_runner_up": vs_runner_up,
             "vs_dummy": vs_dummy,
+        }
+        # Same margin, expressed in units of pooled fold std -- a raw gap of
+        # 0.02 means very different things at std=0.001 versus std=0.05.
+        if dummy is not None:
+            stds_margin = compute_winner_margin(
+                outcomes, primary, winner.experiment_id, dummy.experiment_id
+            )
+            if winner_margin["vs_runner_up"] is not None:
+                winner_margin["vs_runner_up"]["improvement_stds"] = stds_margin.vs_runner_up_stds
+            winner_margin["vs_dummy_stds"] = stds_margin.vs_dummy_stds
+
+    field_checks: dict[str, Any] | None = None
+    if planned_experiment_ids:
+        audit = audit_terminal_states(planned_experiment_ids, outcomes)
+        failures = compute_failure_census(outcomes)
+        # cost_census's estimate half needs specs' budgets, which the dossier
+        # doesn't receive directly; the actual total wall time is still useful
+        # context on its own.
+        cost = compute_cost_census(outcomes, ())
+        field_checks = {
+            "terminal_state_complete": audit.complete,
+            "missing_experiment_ids": list(audit.missing_ids),
+            "failed_count": failures.failed,
+            "skipped_count": failures.skipped,
+            "failure_reasons": list(failures.failure_reasons),
+            "total_wall_time_seconds": cost.total_wall_time_seconds,
         }
 
     top_features = []
@@ -148,6 +174,7 @@ def build_deployment_dossier(
         "winner_margin": winner_margin,
         "top_features": top_features,
         "critique": critique_summary,
+        "field_checks": field_checks,
         "lineage": {
             "model_id": model.meta.artifact_id,
             "dataset_id": train_dataset_id,
@@ -183,14 +210,17 @@ def build_deployment_bundle(
     evaluation: EvaluationReport | None = None,
     explainability: ExplainabilityReport | None = None,
     critique: CritiqueReport | None = None,
+    planned_experiment_ids: tuple[str, ...] = (),
 ) -> DeploymentBundle:
     """Assemble and store a DeploymentBundle after Gate 3 sign-off.
 
     ``outcomes``/``evaluation``/``explainability``/``critique`` are optional
     so a bare-minimum caller still gets a bundle; when given, Gate 3 shows
-    the full comparison table, winner margin, top features, and critique
-    verdict instead of just artifact hashes — "why trust deploying this?"
-    answered with evidence, not bare ids.
+    the full comparison table, winner margin, top features, critique
+    verdict, and (when ``planned_experiment_ids`` is also given) the same
+    terminal-state/failure/cost field checks the Critic saw — instead of
+    just artifact hashes. "Why trust deploying this?" answered with
+    evidence, not bare ids.
     """
     schema_spec = build_inference_schema_spec(
         profile, target_column=problem.target_column, feature_names=feature_names
@@ -210,6 +240,7 @@ def build_deployment_bundle(
         evaluation=evaluation,
         explainability=explainability,
         critique=critique,
+        planned_experiment_ids=planned_experiment_ids,
     )
 
     require_approval(

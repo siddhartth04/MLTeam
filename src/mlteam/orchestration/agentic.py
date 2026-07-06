@@ -101,6 +101,16 @@ def _check_experiment_quorum(
 _SCREENING_TEMPLATES = ("dummy_baseline", "linear_default", "lightgbm_default")
 
 
+def _screening_experiment_id(template: str) -> str:
+    return f"screen-{template.replace('_default', '').replace('_baseline', '')}"
+
+
+def screening_experiment_ids() -> tuple[str, ...]:
+    """The fixed experiment_ids the screening round always plans — used both
+    to run screening and, independently, to audit that it actually completed."""
+    return tuple(_screening_experiment_id(t) for t in _SCREENING_TEMPLATES)
+
+
 def _run_screening(
     store: GuardedArtifactStore,
     dataset_id: str,
@@ -120,7 +130,7 @@ def _run_screening(
     and simply produces one fewer screening result, not a broken run."""
     specs = tuple(
         ExperimentSpec(
-            experiment_id=f"screen-{template.replace('_default', '').replace('_baseline', '')}",
+            experiment_id=_screening_experiment_id(template),
             template_id=template,
             budget=estimate_budget(template, n_rows),
             is_baseline=(template == "dummy_baseline"),
@@ -409,8 +419,20 @@ def run_agentic_pipeline(
         profile=train_profile,
         primary_metric=spec.primary_metric,
     )
+    all_outcomes = list_experiment_outcomes(store, run_id)
+    planned_ids = screening_experiment_ids() + tuple(s.experiment_id for s in specs)
     critique = critique_evaluation(
-        client, store, report=report, primary_metric=spec.primary_metric, run_id=run_id
+        client,
+        store,
+        report=report,
+        primary_metric=spec.primary_metric,
+        run_id=run_id,
+        outcomes=all_outcomes,
+        planned_experiment_ids=planned_ids,
+        specs=tuple(specs),
+        excluded_templates=excluded_templates,
+        winner_experiment_id=best_key,
+        dummy_experiment_id=dummy_key,
     )
 
     pipeline = PipelineResult(

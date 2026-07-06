@@ -34,8 +34,9 @@ from mlteam.agents.splitter import detect_time_column, plan_split
 from mlteam.agents.time_features import engineer_time_features
 from mlteam.agents.trainer import compute_env_hash
 from mlteam.agents.triage import triage_dataset
-from mlteam.contracts import CritiqueReport, ProblemSpec, TaskType
+from mlteam.contracts import CritiqueReport, ExperimentSpec, ProblemSpec, TaskType
 from mlteam.evaluation.report import build_evaluation_report
+from mlteam.evaluation.results import TrainResult
 from mlteam.llm.client import LLMClient, LLMValidationError
 from mlteam.orchestration.gates import ApprovalGate, GateName, require_approval
 from mlteam.orchestration.pipeline import (
@@ -49,6 +50,47 @@ from mlteam.orchestration.pipeline import (
 from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
+
+_MIN_QUORUM_FRACTION = 0.5
+
+
+def _check_experiment_quorum(
+    specs: tuple[ExperimentSpec, ...],
+    results: dict[str, TrainResult],
+    skipped: tuple[tuple[str, str], ...],
+    dummy_key: str,
+) -> None:
+    """Refuse to silently crown a survivor when the candidate field collapsed.
+
+    ``planned`` excludes the dummy floor (it always trains or the run already
+    aborted in ``_train_all``); ``completed`` is how many of those actually
+    produced a model. Zero completions is fatal — there is nothing to select
+    from and no evidence to evaluate. Below-half completions is not fatal
+    (partial evidence can still be a valid, if degraded, result) but must be
+    loud: the persisted FAILED outcomes make every failure visible on the
+    leaderboard, and this warning makes the degradation visible in the logs
+    a human is likely to read at Gate 2 / the critique stage.
+    """
+    planned = [s for s in specs if s.experiment_id != dummy_key]
+    completed = [s for s in planned if s.experiment_id in results]
+    if not planned:
+        return
+    if not completed:
+        failures = "; ".join(f"{template}: {error}" for template, error in skipped)
+        raise ValueError(
+            f"all {len(planned)} candidate experiment(s) failed — nothing to "
+            f"evaluate or deploy: {failures}"
+        )
+    if len(completed) < _MIN_QUORUM_FRACTION * len(planned):
+        failed_ids = {s.experiment_id for s in planned} - {s.experiment_id for s in completed}
+        _log.warning(
+            "experiment_quorum_degraded",
+            planned=len(planned),
+            completed=len(completed),
+            failed=sorted(failed_ids),
+            hint="fewer than half the planned experiments completed; check the "
+            "leaderboard for FAILED outcomes before trusting the winner",
+        )
 
 
 @dataclass(frozen=True)
@@ -256,6 +298,7 @@ def run_agentic_pipeline(
         mlflow_enabled=mlflow_enabled,
     )
     dummy_key = _dummy_key(tuple(specs))
+    _check_experiment_quorum(tuple(specs), results, skipped, dummy_key)
     best_key = _select_best(results, spec.primary_metric, dummy_key)
     report = build_evaluation_report(
         store,

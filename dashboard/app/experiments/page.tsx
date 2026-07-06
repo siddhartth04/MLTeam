@@ -55,6 +55,7 @@ export default function ExperimentsPage() {
                 <tr className="text-left text-ink-faint">
                   <th className="pb-3 pr-4">Experiment</th>
                   <th className="pb-3 pr-4">Template</th>
+                  <th className="pb-3 pr-4">State</th>
                   {metricNames.map((m) => (
                     <th key={m} className="pb-3 pr-4">
                       {m}
@@ -65,6 +66,7 @@ export default function ExperimentsPage() {
               <tbody>
                 {rows.map((r, i) => {
                   const isBest = r.artifact_id === bestId;
+                  const failed = r.state === "failed";
                   return (
                     <motion.tr
                       key={r.artifact_id}
@@ -72,7 +74,7 @@ export default function ExperimentsPage() {
                       animate={{ opacity: 1 }}
                       transition={{ delay: i * 0.03 }}
                       className={`border-t border-base-700/50 ${
-                        isBest ? "bg-accent/8" : ""
+                        isBest ? "bg-accent/8" : failed ? "bg-danger/8" : ""
                       }`}
                     >
                       <td className="py-3 pr-4">
@@ -90,6 +92,9 @@ export default function ExperimentsPage() {
                         {r.is_baseline && (
                           <span className="ml-2 text-[11px] text-ink-faint">baseline</span>
                         )}
+                      </td>
+                      <td className="py-3 pr-4">
+                        <StateBadge state={r.state} error={r.error} />
                       </td>
                       {metricNames.map((m) => {
                         const cell = r.metrics[m];
@@ -119,6 +124,29 @@ export default function ExperimentsPage() {
             </table>
           </div>
         </Panel>
+      )}
+    </div>
+  );
+}
+
+function truncate(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function StateBadge({ state, error }: { state: ExperimentRow["state"]; error: string | null }) {
+  if (state === "completed") {
+    return <span className="text-[11px] font-medium text-ok">completed</span>;
+  }
+  if (state === "skipped") {
+    return <span className="text-[11px] text-ink-faint">skipped</span>;
+  }
+  return (
+    <div className="flex flex-col gap-0.5" title={error ?? undefined}>
+      <span className="text-[11px] font-medium text-danger">failed</span>
+      {error && (
+        <span className="max-w-[220px] truncate text-[10px] text-danger/80">
+          {truncate(error, 80)}
+        </span>
       )}
     </div>
   );

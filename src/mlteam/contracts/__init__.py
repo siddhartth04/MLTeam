@@ -37,6 +37,7 @@ from mlteam.contracts.explainability import (
 )
 from mlteam.contracts.features import FeatureOpType, FeaturePlan, FeatureProposal, FeatureSet
 from mlteam.contracts.model import TrainedModel
+from mlteam.contracts.outcome import ExperimentOutcome, ExperimentState
 from mlteam.contracts.problem_spec import CostAsymmetry, ProblemSpec, TaskType, is_classification
 from mlteam.contracts.profile import (
     ColumnProfile,
@@ -77,6 +78,7 @@ ARTIFACT_REGISTRY: dict[str, type[Artifact]] = {
         FinalReport,
         RunTrace,
         TriageReport,
+        ExperimentOutcome,
     )
 }
 
@@ -101,8 +103,10 @@ __all__ = [
     "DatasetVersion",
     "DeploymentBundle",
     "EvaluationReport",
+    "ExperimentOutcome",
     "ExperimentPlan",
     "ExperimentSpec",
+    "ExperimentState",
     "ExplainabilityReport",
     "FeatureImportance",
     "FeatureOpType",

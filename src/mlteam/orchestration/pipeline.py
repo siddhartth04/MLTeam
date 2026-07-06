@@ -10,6 +10,7 @@ influences modeling.
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -26,11 +27,13 @@ from mlteam.contracts import (
     EvaluationReport,
     ExperimentPlan,
     ExperimentSpec,
+    ExperimentState,
     TaskType,
     new_artifact,
 )
 from mlteam.evaluation.metrics import better_than
 from mlteam.evaluation.report import build_evaluation_report
+from mlteam.evaluation.results import store_experiment_outcome
 from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
@@ -114,13 +117,16 @@ def _train_all(
     """Train every spec; non-dummy failures are skipped LOUDLY, not fatally.
 
     Results are keyed by experiment_id — several experiments may share a
-    template (e.g. default and tuned LightGBM).
+    template (e.g. default and tuned LightGBM). Every spec, success or
+    failure, is persisted as an ExperimentOutcome so the leaderboard can
+    show the whole field, not just the survivors.
     """
     results: dict[str, TrainResult] = {}
     skipped: list[tuple[str, str]] = []
     for spec in specs:
+        started = time.monotonic()
         try:
-            results[spec.experiment_id] = train_experiment(
+            result = train_experiment(
                 store,
                 dataset_id,
                 spec,
@@ -131,7 +137,27 @@ def _train_all(
                 env_hash=env_hash,
                 mlflow_enabled=mlflow_enabled,
             )
+            results[spec.experiment_id] = result
+            store_experiment_outcome(
+                store,
+                experiment_id=spec.experiment_id,
+                template_id=spec.template_id,
+                state=ExperimentState.COMPLETED,
+                run_id=run_id,
+                result=result,
+                wall_time_seconds=time.monotonic() - started,
+            )
         except Exception as exc:
+            store_experiment_outcome(
+                store,
+                experiment_id=spec.experiment_id,
+                template_id=spec.template_id,
+                state=ExperimentState.FAILED,
+                run_id=run_id,
+                config=spec.config,
+                wall_time_seconds=time.monotonic() - started,
+                error=str(exc),
+            )
             if spec.template_id == _DUMMY:
                 raise  # without the dummy floor no evaluation is meaningful
             _log.warning(

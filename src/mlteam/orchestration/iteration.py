@@ -8,6 +8,7 @@ the critique actions — both loud-fallback, never silent.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,9 +19,16 @@ from mlteam.agents.critic import critique_evaluation
 from mlteam.agents.experiment_planner import revise_experiment_plan
 from mlteam.agents.hpo import SEARCH_SPACES, SearchSpace, tune_experiment
 from mlteam.agents.trainer import TrainResult, compute_env_hash
-from mlteam.contracts import CritiqueReport, EvaluationReport, TrainedModel, Verdict
+from mlteam.contracts import (
+    CritiqueReport,
+    EvaluationReport,
+    ExperimentState,
+    TrainedModel,
+    Verdict,
+)
 from mlteam.evaluation.metrics import better_than
 from mlteam.evaluation.report import build_evaluation_report
+from mlteam.evaluation.results import store_experiment_outcome
 from mlteam.llm.client import LLMClient, LLMValidationError
 from mlteam.orchestration.agentic import AgenticResult, run_agentic_pipeline
 from mlteam.orchestration.budget import BudgetTracker, RunBudget
@@ -149,23 +157,50 @@ def run_iterative_pipeline(
         tunable = results[best_now].model.template_id
         hpo_id = f"hpo-{tunable}-iter{iteration}"
         if hpo_trials > 0 and tunable in SEARCH_SPACES and hpo_id not in results:
-            outcome = tune_experiment(
-                store,
-                dataset_id,
-                template_id=tunable,
-                task_type=spec.task_type,
-                primary_metric=primary,
-                run_id=run_id,
-                seed=seed + iteration,
-                n_folds=n_folds,
-                env_hash=env_hash,
-                n_trials=hpo_trials,
-                space=hpo_space_override,
-                experiment_id=hpo_id,
-                mlflow_enabled=mlflow_enabled,
-            )
-            results[hpo_id] = outcome.result
-            new_ids.append(hpo_id)
+            started = time.monotonic()
+            try:
+                hpo_outcome = tune_experiment(
+                    store,
+                    dataset_id,
+                    template_id=tunable,
+                    task_type=spec.task_type,
+                    primary_metric=primary,
+                    run_id=run_id,
+                    seed=seed + iteration,
+                    n_folds=n_folds,
+                    env_hash=env_hash,
+                    n_trials=hpo_trials,
+                    space=hpo_space_override,
+                    experiment_id=hpo_id,
+                    mlflow_enabled=mlflow_enabled,
+                )
+                results[hpo_id] = hpo_outcome.result
+                new_ids.append(hpo_id)
+                store_experiment_outcome(
+                    store,
+                    experiment_id=hpo_id,
+                    template_id=tunable,
+                    state=ExperimentState.COMPLETED,
+                    run_id=run_id,
+                    result=hpo_outcome.result,
+                    wall_time_seconds=time.monotonic() - started,
+                )
+            except Exception as exc:
+                store_experiment_outcome(
+                    store,
+                    experiment_id=hpo_id,
+                    template_id=tunable,
+                    state=ExperimentState.FAILED,
+                    run_id=run_id,
+                    wall_time_seconds=time.monotonic() - started,
+                    error=str(exc),
+                )
+                _log.warning(
+                    "hpo_retrain_skipped",
+                    template=tunable,
+                    error=str(exc),
+                    hint="HPO retrain failed; continuing without it this iteration",
+                )
 
         # (b) LLM plan revision addressing the critique actions.
         try:

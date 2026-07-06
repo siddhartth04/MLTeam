@@ -12,6 +12,7 @@ from typing import Any
 from mlteam.contracts import (
     CritiqueReport,
     EvaluationReport,
+    ExperimentOutcome,
     ExplainabilityReport,
     FinalReport,
     ProblemSpec,
@@ -96,7 +97,41 @@ def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dic
 
 
 def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str, Any]]:
-    """Leaderboard rows: every TrainedModel for a run + its CV metrics."""
+    """Leaderboard rows: every experiment attempt for a run, whatever its fate.
+
+    Reads ExperimentOutcome artifacts — persisted for every planned experiment
+    regardless of whether it completed, failed, or was skipped — so a crashed
+    template renders as a visible failure with its error, not as a blank row
+    indistinguishable from "never ran". Falls back to the legacy TrainedModel
+    join (winner-only metrics) for runs recorded before outcomes existed.
+    """
+    rows: list[dict[str, Any]] = []
+    for aid in store.list_ids(ExperimentOutcome.artifact_type()):
+        record = store._inner.lineage.get_record(aid)
+        if record is None or record.run_id != run_id:
+            continue
+        outcome: ExperimentOutcome = store.get(aid)
+        rows.append(
+            {
+                "artifact_id": aid,
+                "experiment_id": outcome.experiment_id,
+                "template_id": outcome.template_id,
+                "config": outcome.config,
+                "state": outcome.state.value,
+                "metrics": {m.name: {"mean": m.mean, "std": m.std} for m in outcome.cv_metrics},
+                "wall_time_seconds": outcome.wall_time_seconds,
+                "error": outcome.error,
+                "is_baseline": outcome.template_id == "dummy_baseline",
+            }
+        )
+    if rows:
+        rows.sort(key=lambda r: r["experiment_id"])
+        return rows
+    return _legacy_experiments_view(store, run_id)
+
+
+def _legacy_experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str, Any]]:
+    """Pre-ExperimentOutcome fallback: winner-only metrics via TrainedModel."""
     rows: list[dict[str, Any]] = []
     for aid in store.list_ids(TrainedModel.artifact_type()):
         record = store._inner.lineage.get_record(aid)
@@ -115,8 +150,10 @@ def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str,
                 "experiment_id": model.experiment_id,
                 "template_id": model.template_id,
                 "config": model.config,
-                "seed": model.seed,
+                "state": "completed",
                 "metrics": metrics,
+                "wall_time_seconds": None,
+                "error": None,
                 "is_baseline": model.template_id == "dummy_baseline",
             }
         )

@@ -46,7 +46,7 @@ def test_round_trip_preserves_artifact():
 
 
 def test_registry_covers_all_artifact_types():
-    assert len(ARTIFACT_REGISTRY) == 16
+    assert len(ARTIFACT_REGISTRY) == 17
     for name, cls in ARTIFACT_REGISTRY.items():
         assert cls.artifact_type() == name
 

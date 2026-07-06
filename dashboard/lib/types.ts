@@ -53,13 +53,17 @@ export interface MetricSummary {
   std: number;
 }
 
+export type ExperimentState = "completed" | "failed" | "skipped";
+
 export interface ExperimentRow {
   artifact_id: string;
   experiment_id: string;
   template_id: string;
   config: Record<string, unknown>;
-  seed: number;
+  state: ExperimentState;
   metrics: Record<string, MetricSummary>;
+  wall_time_seconds: number | null;
+  error: string | null;
   is_baseline: boolean;
 }
 

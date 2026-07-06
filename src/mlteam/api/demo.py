@@ -94,8 +94,13 @@ def seed_demo_run(
         store = open_store(store_root)
         client = LLMClient(FixtureTransport.from_file(_FIXTURE), model="claude-sonnet-4-6")
         note("Demo run started", "success")
-        for s in list(Stage)[:13]:
-            stage(s, StageStatus.DONE)
+        from mlteam.api.run_manager import RegistryReporter
+
+        reporter = RegistryReporter(registry, DEMO_UI_RUN_ID, client)
+        # Demo uses AutoApproveGate (no dashboard round-trip), so the gate
+        # stages never see a real request/response — mark them done up front.
+        for gate_stage in (Stage.GATE_SPEC, Stage.GATE_PLAN, Stage.GATE_DEPLOY):
+            stage(gate_stage, StageStatus.DONE, "auto-approved")
         result = run_iterative_pipeline(
             store,
             csv_path,
@@ -106,9 +111,9 @@ def seed_demo_run(
             seed=42,
             n_folds=3,
             hpo_trials=6,
+            reporter=reporter,
         )
         registry.set_cost(DEMO_UI_RUN_ID, client.total_cost_usd)
-        stage(Stage.ITERATE, StageStatus.DONE, f"{len(result.iterations)} iteration(s)")
         note(f"Critic verdict: {result.final_critique.verdict.value}", "success", Stage.CRITIC)
 
         spec = result.initial.problem_spec

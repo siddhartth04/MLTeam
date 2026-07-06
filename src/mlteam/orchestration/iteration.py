@@ -34,6 +34,7 @@ from mlteam.orchestration.agentic import AgenticResult, run_agentic_pipeline
 from mlteam.orchestration.budget import BudgetTracker, RunBudget
 from mlteam.orchestration.gates import ApprovalGate
 from mlteam.orchestration.pipeline import _train_all
+from mlteam.orchestration.progress import NULL_REPORTER, ProgressReporter
 from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
@@ -104,6 +105,7 @@ def run_iterative_pipeline(
     hpo_trials: int = 15,
     hpo_space_override: SearchSpace | None = None,
     mlflow_enabled: bool = False,
+    reporter: ProgressReporter = NULL_REPORTER,
 ) -> IterativeResult:
     """Full loop: agentic head, then critique-driven improvement under budget."""
     budget = budget or RunBudget()
@@ -119,6 +121,7 @@ def run_iterative_pipeline(
         holdout_fraction=holdout_fraction,
         n_folds=n_folds,
         mlflow_enabled=mlflow_enabled,
+        reporter=reporter,
     )
     spec = initial.problem_spec
     primary = spec.primary_metric
@@ -137,19 +140,24 @@ def run_iterative_pipeline(
     while True:
         if critique.verdict is Verdict.APPROVE:
             status, stop_reason = "approved", "critic approved"
+            reporter.stage("iterate", "done", detail=f"{len(records)} iteration(s)")
             break
         if critique.verdict is Verdict.HALT:
             status, stop_reason = "halted", "critic halted"
+            reporter.stage("iterate", "done", detail="halted")
             break
         ok, reason = tracker.can_continue()
         if not ok:
             status, stop_reason = "budget_exhausted", reason
             _log.warning("iteration_budget_exhausted", reason=reason)
+            reporter.stage("iterate", "done", detail=reason)
             break
 
         tracker.record_iteration()
         iteration = tracker.iterations_used
         _log.info("iteration_started", index=iteration, budget=tracker.snapshot())
+        reporter.stage("iterate", "active", detail=f"iteration {iteration}")
+        reporter.log(f"Starting iteration {iteration}: {critique.verdict.value}", stage="iterate")
         new_ids: list[str] = []
 
         # (a) Budget-aware HPO on the best tunable template.
@@ -268,6 +276,10 @@ def run_iterative_pipeline(
             index=iteration,
             verdict=critique.verdict.value,
             best=best_now,
+        )
+        reporter.log(
+            f"Iteration {iteration} finished: {critique.verdict.value} (best: {best_now})",
+            stage="iterate",
         )
 
     final_best = _best_key(results, primary, dummy_key)

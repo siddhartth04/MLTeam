@@ -22,6 +22,7 @@ from mlteam.llm.client import LLMClient
 from mlteam.llm.transport import Transport
 from mlteam.orchestration.gates import ApprovalGate, GateDecision, GateName, GateRejectedError
 from mlteam.orchestration.pipeline import PipelineResult
+from mlteam.orchestration.progress import ProgressReporter
 from mlteam.store import ArtifactStore, open_store
 from mlteam.store.ledger import record_outcome
 
@@ -32,6 +33,28 @@ _GATE_TO_STAGE = {
     GateName.TRAINING_PLAN: Stage.GATE_PLAN,
     GateName.DEPLOYMENT: Stage.GATE_DEPLOY,
 }
+
+
+class RegistryReporter:
+    """ProgressReporter that forwards live stage/log events to the run
+    registry (and ticks the LLM cost meter on every call) so the dashboard's
+    SSE stream reflects real progress as the pipeline runs."""
+
+    def __init__(self, registry: RunRegistry, ui_run_id: str, client: LLMClient) -> None:
+        self._registry = registry
+        self._ui_run_id = ui_run_id
+        self._client = client
+
+    def stage(self, stage: str, status: str, detail: str = "") -> None:
+        self._registry.update_stage(self._ui_run_id, Stage(stage), StageStatus(status), detail)
+        self._registry.set_cost(self._ui_run_id, self._client.total_cost_usd)
+
+    def log(self, message: str, *, level: str = "info", stage: str | None = None) -> None:
+        self._registry.log(
+            self._ui_run_id,
+            LogEvent(level=level, stage=Stage(stage) if stage else None, message=message),
+        )
+        self._registry.set_cost(self._ui_run_id, self._client.total_cost_usd)
 
 
 def _record_ledger_outcome(
@@ -160,6 +183,7 @@ def _execute(
     gate: ApprovalGate = RegistryGate(registry, ui_run_id)
     client = LLMClient(transport, model=model, trace=None)
     registry.set_status(ui_run_id, RunStatus.RUNNING)
+    reporter: ProgressReporter = RegistryReporter(registry, ui_run_id, client)
 
     def stage(s: Stage, status: StageStatus, detail: str = "") -> None:
         registry.update_stage(ui_run_id, s, status, detail)
@@ -172,22 +196,20 @@ def _execute(
         note("Run started", level="success")
         stage(Stage.REQUIREMENT, StageStatus.ACTIVE)
 
-        # The iterative pipeline runs Gates 1 & 2 internally via `gate`; we mark
-        # the surrounding stages around it for the flow diagram.
-        result = _run_with_stage_tracking(
-            registry,
-            ui_run_id,
-            lambda: run_iterative_pipeline(
-                store,
-                data_path,
-                goal_text=goal_text,
-                client=client,
-                gate=gate,
-                budget=RunBudget(max_iterations=2),
-                seed=seed,
-                n_folds=n_folds,
-                hpo_trials=8,
-            ),
+        # The iterative pipeline runs Gates 1 & 2 internally via `gate`; the
+        # reporter drives real per-stage transitions as each agent boundary
+        # is crossed (see orchestration/progress.py).
+        result = run_iterative_pipeline(
+            store,
+            data_path,
+            goal_text=goal_text,
+            client=client,
+            gate=gate,
+            budget=RunBudget(max_iterations=2),
+            seed=seed,
+            n_folds=n_folds,
+            hpo_trials=8,
+            reporter=reporter,
         )
         registry.set_cost(ui_run_id, client.total_cost_usd)
         spec = result.initial.problem_spec
@@ -318,46 +340,3 @@ def _execute(
             ),
         )
         registry.finish(ui_run_id, status=RunStatus.FAILED, error=str(exc))
-
-
-def _run_with_stage_tracking(registry: RunRegistry, ui_run_id: str, fn: Any) -> Any:
-    """Mark the requirement->critic stages active/done around the loop call.
-
-    The iterative pipeline is a single call; for a truthful flow diagram we
-    optimistically light the deterministic stages, then let the gate/critic
-    stages settle from the loop's own logging. This keeps the UI lively without
-    threading a callback through every agent.
-    """
-    for s in (
-        Stage.INGEST,
-        Stage.PROFILE,
-        Stage.SPLIT,
-        Stage.CLEAN,
-        Stage.FEATURES,
-        Stage.PLAN,
-        Stage.TRAIN,
-        Stage.EVALUATE,
-        Stage.CRITIC,
-    ):
-        registry.update_stage(ui_run_id, s, StageStatus.PENDING)
-    registry.update_stage(ui_run_id, Stage.REQUIREMENT, StageStatus.DONE)
-    result = fn()
-    for s in (
-        Stage.INGEST,
-        Stage.PROFILE,
-        Stage.SPLIT,
-        Stage.CLEAN,
-        Stage.FEATURES,
-        Stage.PLAN,
-        Stage.TRAIN,
-        Stage.EVALUATE,
-        Stage.CRITIC,
-    ):
-        registry.update_stage(ui_run_id, s, StageStatus.DONE)
-    if result.iterations:
-        registry.update_stage(
-            ui_run_id, Stage.ITERATE, StageStatus.DONE, f"{len(result.iterations)} iteration(s)"
-        )
-    else:
-        registry.update_stage(ui_run_id, Stage.ITERATE, StageStatus.SKIPPED, "not needed")
-    return result

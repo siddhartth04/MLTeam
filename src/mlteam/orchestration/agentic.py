@@ -48,6 +48,7 @@ from mlteam.orchestration.pipeline import (
     default_experiment_specs,
     new_run_id,
 )
+from mlteam.orchestration.progress import NULL_REPORTER, ProgressReporter
 from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
@@ -200,11 +201,13 @@ def run_agentic_pipeline(
     n_folds: int = 5,
     include_tabpfn: bool = False,
     mlflow_enabled: bool = False,
+    reporter: ProgressReporter = NULL_REPORTER,
 ) -> AgenticResult:
     """Run the LLM-driven pipeline end to end (no iteration loop yet)."""
     run_id = run_id or new_run_id()
 
     # -- Requirement Understanding + GATE 1 ---------------------------------
+    reporter.stage("requirement", "active")
     columns = _read_columns(data_path)
     previews = column_preview(data_path)
     spec = understand_requirements(
@@ -215,6 +218,8 @@ def run_agentic_pipeline(
         run_id=run_id,
         column_profile=previews,
     )
+    reporter.stage("requirement", "done", detail=f"task: {spec.task_type.value}")
+    reporter.log(f"Understood goal as {spec.task_type.value} on '{spec.target_column}'")
     require_approval(
         gate,
         GateName.PROBLEM_SPEC,
@@ -250,6 +255,7 @@ def run_agentic_pipeline(
     store.put(spec)
 
     # -- Deterministic substrate: ingest, triage, [time features], split ------
+    reporter.stage("ingest", "active")
     raw = ingest_file(
         store,
         data_path,
@@ -257,12 +263,20 @@ def run_agentic_pipeline(
         run_id=run_id,
         allow_missing_target=True,  # triage drops unlabeled rows with a report
     )
+    reporter.stage("ingest", "done", detail=f"{raw.n_rows} rows")
+    reporter.log(f"Ingested {raw.n_rows} rows, {raw.n_cols} columns", stage="ingest")
+
     triaged, triage_report = triage_dataset(
         store,
         raw.meta.artifact_id,
         target_column=spec.target_column,
         task_type=spec.task_type,
         run_id=run_id,
+    )
+    reporter.log(
+        f"Triage: {triage_report.rows_before} -> {triage_report.rows_after} rows "
+        f"({len(triage_report.remedies)} remedie(s))",
+        stage="ingest",
     )
     modeling_id = triaged.meta.artifact_id
     time_column = spec.time_column
@@ -281,7 +295,13 @@ def run_agentic_pipeline(
             run_id=run_id,
         )
         modeling_id = featured.meta.artifact_id
+
+    reporter.stage("profile", "active")
     raw_profile = profile_dataset(store, modeling_id, run_id=run_id, seed=seed)
+    reporter.stage("profile", "done", detail=f"{len(raw_profile.columns)} columns")
+    reporter.log(f"Profiled {len(raw_profile.columns)} column(s)", stage="profile")
+
+    reporter.stage("split", "active")
     split = plan_split(
         store,
         modeling_id,
@@ -292,17 +312,24 @@ def run_agentic_pipeline(
         n_folds=n_folds,
         time_column=time_column,
     )
+    reporter.stage("split", "done", detail=f"{n_folds} folds")
+    reporter.log(f"Split into train/holdout with {n_folds} CV folds", stage="split")
     train_profile = profile_dataset(store, split.train_ref.artifact_id, run_id=run_id, seed=seed)
 
     # -- LLM cleaning proposal (deterministic fallback, loudly) ---------------
+    reporter.stage("clean", "active")
     try:
         ops = propose_cleaning_ops_llm(client, train_profile, target_column=spec.target_column)
     except LLMValidationError as exc:
         _log.warning("cleaning_proposer_fallback", error=str(exc))
+        reporter.log(f"Cleaning proposer fell back to deterministic ops: {exc}", level="warning")
         ops = propose_cleaning_ops(train_profile)
     cleaned, manifest = execute_cleaning(store, split.train_ref.artifact_id, ops, run_id=run_id)
+    reporter.stage("clean", "done", detail=f"{len(manifest.ops)} op(s)")
+    reporter.log(f"Applied {len(manifest.ops)} cleaning operation(s)", stage="clean")
 
     # -- LLM feature plan + deterministic execution -----------------------------
+    reporter.stage("features", "active")
     feature_plan_id: str | None = None
     feature_dataset_id: str | None = None
     modeling_dataset = cleaned
@@ -317,8 +344,12 @@ def run_agentic_pipeline(
         if featured_ds is not None:
             modeling_dataset = featured_ds
             feature_dataset_id = featured_ds.meta.artifact_id
+        reporter.stage("features", "done", detail=f"{len(feature_plan.proposals)} proposal(s)")
+        reporter.log(f"Proposed {len(feature_plan.proposals)} feature(s)", stage="features")
     except LLMValidationError as exc:
         _log.warning("feature_proposer_skipped", error=str(exc))
+        reporter.stage("features", "done", detail="skipped")
+        reporter.log(f"Feature proposer skipped: {exc}", level="warning", stage="features")
 
     # -- Screening round: cheap probes BEFORE the plan is drafted -------------
     # A senior engineer runs cheap probes first, reads them, then spends the
@@ -327,7 +358,9 @@ def run_agentic_pipeline(
     # dummy_baseline/lightgbm_default specs reuse these results outright
     # (via _train_all's identical-key check) whenever the plan keeps their
     # vetted defaults, at zero additional training cost.
+    reporter.stage("plan", "active")
     env_hash = compute_env_hash()
+    reporter.log("Running screening probes (dummy, linear, lightgbm)", stage="plan")
     screening_results = _run_screening(
         store,
         modeling_dataset.meta.artifact_id,
@@ -364,6 +397,8 @@ def run_agentic_pipeline(
         plan_id = ""
         excluded_templates = ()
     total = sum(s.budget.wall_time_seconds for s in specs)
+    reporter.stage("plan", "done", detail=f"{len(specs)} experiment(s) planned")
+    reporter.log(f"Planned {len(specs)} experiment(s), ~{total:.0f}s estimated", stage="plan")
     require_approval(
         gate,
         GateName.TRAINING_PLAN,
@@ -397,6 +432,7 @@ def run_agentic_pipeline(
     )
 
     # -- Train, evaluate, critique -------------------------------------------
+    reporter.stage("train", "active")
     results, skipped = _train_all(
         store,
         modeling_dataset.meta.artifact_id,
@@ -411,6 +447,10 @@ def run_agentic_pipeline(
     dummy_key = _dummy_key(tuple(specs))
     _check_experiment_quorum(tuple(specs), results, skipped, dummy_key)
     best_key = _select_best(results, spec.primary_metric, dummy_key)
+    reporter.stage("train", "done", detail=f"{len(results)} completed, {len(skipped)} skipped")
+    reporter.log(f"Trained {len(results)} experiment(s); winner so far: {best_key}", stage="train")
+
+    reporter.stage("evaluate", "active")
     report = build_evaluation_report(
         store,
         run_id=run_id,
@@ -419,6 +459,10 @@ def run_agentic_pipeline(
         profile=train_profile,
         primary_metric=spec.primary_metric,
     )
+    reporter.stage("evaluate", "done")
+    reporter.log(f"Evaluation report built for winner {best_key}", stage="evaluate")
+
+    reporter.stage("critic", "active")
     all_outcomes = list_experiment_outcomes(store, run_id)
     planned_ids = screening_experiment_ids() + tuple(s.experiment_id for s in specs)
     critique = critique_evaluation(
@@ -434,6 +478,8 @@ def run_agentic_pipeline(
         winner_experiment_id=best_key,
         dummy_experiment_id=dummy_key,
     )
+    reporter.stage("critic", "done", detail=critique.verdict.value)
+    reporter.log(f"Critic verdict: {critique.verdict.value}", stage="critic")
 
     pipeline = PipelineResult(
         run_id=run_id,

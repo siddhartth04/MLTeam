@@ -191,7 +191,12 @@ Tasks:
    into the `DecisionRecord`. Update `SYSTEM_PROMPT` to demand: why this target, which
    other columns were candidates and why rejected, what assumptions were made.
 4. `agents/experiment_planner.py`: same treatment — why these templates for THIS data
-   profile, which were considered and skipped and why.
+   profile, which were considered and skipped and why. Additionally extend the plan
+   draft with `excluded_templates: list[ExcludedTemplateDraft]` where each entry is
+   `{template_id: str, reason: str}` — the prompt must demand coverage of the major
+   families not planned (linear, svm/knn, mlp, ensembles, detectors where applicable):
+   the plan's NEGATIVE SPACE becomes auditable. Store on the ExperimentPlan contract
+   as an optional tuple (additive). The Phase 10 critic reads it.
 5. Gate summaries: Gate 1 payload (in `agentic.py`) includes the reasoning fields;
    Gate 2 already carries `rationale` — add `alternatives_considered`.
 6. Dashboard `app/gates/page.tsx`: render reasoning blocks (why / evidence /
@@ -326,18 +331,112 @@ Commit: `fix: cost tracking for OpenAI/Azure models + price override`.
 
 ---
 
+## Phase 9 — Adaptive two-round planning (screen → contend)
+
+**Why:** the planner spends all its intelligence BEFORE any experiment runs — it plans
+once, blind to results. A senior engineer runs cheap probes first, reads them, then
+spends the budget. This phase makes the initial plan results-conditioned without
+unbounded agent loops. It also encodes the diagnostic role of cheap models: linear
+regression is an instrument, not a competitor (strong linear ⇒ mostly-linear signal;
+linear ≈ dummy while LGBM soars ⇒ nonlinearity justifies ensembles; near-perfect
+linear ⇒ LEAKAGE ALARM, flag — never just escalate).
+
+Tasks:
+1. In `orchestration/agentic.py`, before the experiment-planning LLM call: run a
+   deterministic **screening round** via the existing `_train_all` — fixed specs:
+   `dummy_baseline`, `linear_default`, `lightgbm_default` (all defaults, seconds of
+   compute). Persist their `ExperimentOutcome`s (Phase 1 machinery) tagged with
+   `experiment_id` prefix `screen-`.
+2. Pass screening results into `plan_experiments` payload as
+   `"screening_results": [{template, primary_metric_mean, primary_metric_std,
+   wall_time_seconds}]` alongside the profile and Phase 7 priors.
+3. `SYSTEM_PROMPT` additions (evidence-driven selection heuristics):
+   - strong linear (close to LGBM) → mostly-linear signal: prefer regularized linear
+     + one GBDT; deep stack unlikely to pay for itself.
+   - linear ≈ dummy, LGBM strong → nonlinear/interaction-heavy: prioritize GBDT
+     family + stacking; MLP only if rows are numerous and dense-numeric.
+   - LGBM or linear near-perfect → suspect leakage; say so in the rationale; plan a
+     verification (the critic's hard gates will also catch it).
+   - skip SVM/KNN above ~20k rows (O(n²)); skip MLP under ~10k rows or with heavy
+     categoricals; NEVER skip the mandatory baselines.
+4. Round-2 plan must not re-run identical template+config already screened — the plan
+   validator should treat screened experiments as satisfying the baselines-first rule
+   (reference their outcomes instead of retraining; simplest: keep requiring dummy +
+   lightgbm specs in the plan but have `_train_all` reuse an existing outcome when an
+   identical template+config+dataset was already trained this run).
+5. Gate 2 summary gains the screening table (template, metric, time) so the human sees
+   the evidence the plan was conditioned on.
+6. Tests: screening outcomes persisted; planner payload contains screening results;
+   identical-spec reuse hits (no double training); Gate 2 payload includes the table;
+   fixture-replay tests updated (this ADDS no LLM calls — screening is deterministic —
+   so replay order is unchanged; verify).
+
+Commit: `feat: adaptive two-round planning — screening evidence conditions the plan`.
+
+---
+
+## Phase 10 — Critic upgrade: full-field evidence + exploration audit
+
+**Why:** the critic exists and is well-designed (report-only input, hard gates that
+code-override the LLM, approve/iterate/halt) but it judges ONLY best-vs-dummy. It
+cannot compare competitors, audit terminal states, or challenge the plan's negative
+space. Upgrade its evidence diet, not its identity. Do NOT add a second reviewer
+agent — same LLM, different hat, 2× cost, zero new information.
+
+Tasks:
+1. Deterministic pre-checks (new module `evaluation/field_checks.py`, pure functions,
+   fed INTO the critique payload — never LLM-computed):
+   - terminal-state audit: every spec in the ExperimentPlan (+ screening) has a
+     persisted ExperimentOutcome; any hole = structured error (this is a bug trap).
+   - failure census: counts by state, failure reasons list.
+   - winner margin: (winner − runner-up) on the primary metric in units of pooled
+     fold std. Also winner-vs-dummy margin.
+   - cost census: total wall time vs Gate-2 estimate.
+2. Extend the critique payload in `agents/critic.py` with: the full outcome table
+   (template, state, metrics mean±std, time), the field checks above, and the plan's
+   `excluded_templates` reasons (Phase 3).
+3. `SYSTEM_PROMPT` additions: challenge exploration coverage ("given this profile,
+   was excluding family X justified? If not, emit an iterate action to try it");
+   when `margin_in_stds < 0.5`, the verdict text MUST address the tie — recommend
+   the simpler/cheaper model or justify keeping the winner; explicitly state
+   "evidence sufficient for deployment: yes/no, because ...".
+4. New HARD gate (code-enforced, `evaluation/` where the existing hard gates live):
+   `INCOMPLETE_EXPERIMENT_FIELD` — if the terminal-state audit finds holes, the critic
+   cannot approve (this catches orchestration bugs, not model quality).
+   Margin-indistinguishability is NOT a hard gate — it demands explanation, not a block.
+5. Surface: critique verdict + field checks land in the Gate 3 dossier (Phase 5) and
+   the dashboard critique panel.
+6. Tests: field checks unit-tested (audit hole detection, margin math with hand
+   numbers); critic payload includes outcomes + exclusions; hard gate blocks approval
+   on a synthetic hole; fixture updates for the enriched payload (payload changes are
+   replay-safe; call count unchanged).
+
+Commit: `feat: critic sees the whole field — outcome audit, margin stats, exploration challenge`.
+
+---
+
 ## Explicitly OUT of scope (do not build, even if tempting)
 
-- More agents / new topology — enrich contracts instead (decided in review).
+- More agents / new topology — enrich contracts instead (decided in review; this
+  includes NOT adding a second reviewer/evaluator agent — Phase 10 upgrades the
+  existing critic's evidence instead).
 - LLM "confidence scores" — evidence + alternatives only.
 - Model registry, rollback automation, monitoring loop — separate future phase.
 - Clustering/unsupervised, text/image modalities, distributed training.
-- Early-stop pruning of the experiment list ("linear is great, skip the rest") —
-  requires the leakage-alarm interplay; defer until Phases 1–2 are proven.
+- Unbounded bandit-style experiment loops — Phase 9's two bounded rounds + the
+  existing budget-capped iteration loop are the sanctioned form of adaptivity.
+- Formal significance testing between models — margin-in-fold-stds (Phase 10) is the
+  honest check at 3–5 folds; don't dress up low-power tests as rigor.
+
+## Phase dependencies
+
+0 → everything. 1 → 2..10 (outcomes are the substrate). 3 → 9, 10 (DecisionRecord /
+exclusions feed them). 9 → 10 (critic audits screening too). 5 consumes 1, 3, 10
+outputs as available — build it after 1+3, extend after 10.
 
 ## Definition of done (whole plan)
 
-- All 8 phases committed + pushed, suite green, ruff clean after each.
+- All 10 phases committed + pushed, suite green, ruff clean after each.
 - Demo store reseeded so the dashboard shows the new leaderboard/gate content
   (delete `artifact_store/` + registry state or bump the demo run id).
 - API restarted; user can rerun the house-prices dataset and see: triage report,

@@ -19,6 +19,7 @@ from mlteam.contracts import (
     DatasetVersion,
     EvaluationReport,
     ExplainabilityReport,
+    FeaturePlan,
     FinalReport,
     InsightNarrative,
     ProblemSpec,
@@ -48,6 +49,10 @@ class ReportInputs:
     best_experiment_id: str
     explainability: ExplainabilityReport | None = None
     insights: InsightNarrative | None = None
+    # The row-local feature plan the model was trained with, if any. Replayed on
+    # the frozen holdout at scoring time so its engineered columns exist there
+    # too — without it, every holdout metric silently drops on "columns missing".
+    feature_plan: FeaturePlan | None = None
     iterations: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
@@ -61,7 +66,15 @@ def _holdout_metrics(store: GuardedArtifactStore, inputs: ReportInputs) -> list[
         import polars as pl
 
         frame = pl.read_parquet(unlocked.blob_path(holdout.blob_hash))
-        df = _temporal_to_epoch(frame).to_pandas()
+
+    # Re-derive the engineered feature columns on the holdout so the pipeline
+    # sees the same schema it was trained on. Row-local ops only, so this is
+    # leakage-free (see apply_feature_plan_to_frame).
+    if inputs.feature_plan is not None:
+        from mlteam.agents.feature_executor import apply_feature_plan_to_frame
+
+        frame = apply_feature_plan_to_frame(frame, inputs.feature_plan)
+    df = _temporal_to_epoch(frame).to_pandas()
 
     target = df.pop(inputs.problem.target_column)
     scoring = scoring_for(inputs.problem.task_type)

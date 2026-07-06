@@ -218,6 +218,11 @@ def _execute(
                 best_experiment_id=best_key,
                 explainability=explain_report,
                 insights=insights,
+                feature_plan=(
+                    store.get(result.initial.feature_plan_id)
+                    if pipeline.feature_dataset_id and result.initial.feature_plan_id
+                    else None
+                ),
                 iterations=tuple(
                     {
                         "index": it.index,

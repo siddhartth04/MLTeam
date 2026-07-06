@@ -146,23 +146,18 @@ def _apply_op(df: pl.DataFrame, proposal: FeatureProposal) -> list[pl.Expr]:
     raise _OpRejected(f"unsupported op type '{op.value}'")  # future enum values
 
 
-def execute_feature_plan(
-    store: ArtifactStore,
-    dataset_id: str,
-    plan: FeaturePlan,
-    *,
-    run_id: str,
-) -> tuple[DatasetVersion | None, FeatureSet]:
-    """Apply the plan's executable proposals; store the featured dataset.
+def _build_features(
+    df: pl.DataFrame, plan: FeaturePlan
+) -> tuple[pl.DataFrame, list[str], list[str], set[str]]:
+    """Apply a plan's executable proposals to ``df``. Returns
+    (featured_df, applied_names, dropped_names, new_column_names).
 
-    Returns ``(featured_dataset, feature_set)``. ``featured_dataset`` is None
-    when nothing was applicable — the caller keeps training on the input
-    dataset, and the FeatureSet still records why every proposal was dropped.
+    Pure — no store, no logging of the applied set — so the SAME transformation
+    can be replayed on any frame (e.g. the holdout at report time) and is
+    guaranteed identical to what training saw. All ops here are row-local, so
+    replaying them on a different frame introduces no leakage.
     """
-    dataset = store.get(dataset_id)
-    df = read_dataset(store, dataset)
     existing = set(df.columns)
-
     applied: list[str] = []
     dropped: list[str] = []
     exprs: list[pl.Expr] = []
@@ -187,10 +182,45 @@ def execute_feature_plan(
         new_names.update(out_names)
         applied.append(proposal.name)
 
+    featured = df.with_columns(exprs) if exprs else df
+    return featured, applied, dropped, new_names
+
+
+def apply_feature_plan_to_frame(df: pl.DataFrame, plan: FeaturePlan) -> pl.DataFrame:
+    """Replay a stored FeaturePlan's row-local features on an arbitrary frame.
+
+    Used to re-derive the engineered columns on the frozen holdout at report
+    time — the holdout was split off BEFORE features were built, so scoring it
+    raw silently drops every metric ("columns are missing"). Because every
+    executable op is row-local (each output depends only on its own row), this
+    replay is leakage-free by construction; proposals dropped during the
+    training-time execution are dropped identically here, so the two frames end
+    up with the exact same feature columns.
+    """
+    featured, _applied, _dropped, _new = _build_features(df, plan)
+    return featured
+
+
+def execute_feature_plan(
+    store: ArtifactStore,
+    dataset_id: str,
+    plan: FeaturePlan,
+    *,
+    run_id: str,
+) -> tuple[DatasetVersion | None, FeatureSet]:
+    """Apply the plan's executable proposals; store the featured dataset.
+
+    Returns ``(featured_dataset, feature_set)``. ``featured_dataset`` is None
+    when nothing was applicable — the caller keeps training on the input
+    dataset, and the FeatureSet still records why every proposal was dropped.
+    """
+    dataset = store.get(dataset_id)
+    df = read_dataset(store, dataset)
+    featured, applied, dropped, new_names = _build_features(df, plan)
+
     featured_ds: DatasetVersion | None = None
     dataset_ref = dataset.ref()
-    if exprs:
-        featured = df.with_columns(exprs)
+    if new_names:
         featured_ds = store_dataframe(
             store,
             featured,

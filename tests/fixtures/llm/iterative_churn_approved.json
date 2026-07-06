@@ -201,5 +201,22 @@
       "input_tokens": 1200,
       "output_tokens": 90
     }
+  },
+  {
+    "json": {
+      "findings": [
+        "The strongest driver of churn is the number of support calls: customers who contact support more often are far more likely to leave.",
+        "Contract type matters \u2014 month-to-month customers churn at a noticeably higher rate than yearly-contract customers.",
+        "The model separates churners from non-churners well on held-out data, clearly beating a naive baseline."
+      ],
+      "caveats": [
+        "Performance is measured on historical customers; a shift in customer behaviour or new plans could reduce accuracy.",
+        "Support-call volume is a strong signal but is only known after a customer has already been in contact, limiting how early the model can flag risk."
+      ]
+    },
+    "usage": {
+      "input_tokens": 1400,
+      "output_tokens": 160
+    }
   }
 ]

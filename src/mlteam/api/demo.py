@@ -124,7 +124,17 @@ def seed_demo_run(
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")
 
         from mlteam.agents import read_dataset
+        from mlteam.agents.insight_narrator import narrate_insights
         from mlteam.evaluation.results import list_experiment_outcomes
+
+        insights = narrate_insights(
+            client,
+            store,
+            problem=spec,
+            evaluation=result.final_report,
+            explainability=explain_report,
+            run_id=result.initial.run_id,
+        )
 
         features = [
             c
@@ -162,6 +172,7 @@ def seed_demo_run(
                 best_template_id=pipeline.best_template_id,
                 best_experiment_id=result.best_experiment_id,
                 explainability=explain_report,
+                insights=insights,
                 iterations=tuple(
                     {
                         "index": it.index,

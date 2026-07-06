@@ -59,3 +59,36 @@ def line_figure(x: list[float], y: list[float], *, title: str, x_title: str) -> 
         margin=dict(l=10, r=10, t=40, b=10),
     )
     return fig
+
+
+def histogram_figure(values: list[float], *, title: str, x_title: str) -> Any:
+    """Histogram (used for the residual distribution)."""
+    import plotly.graph_objects as go
+
+    fig = go.Figure(go.Histogram(x=values, nbinsx=40))
+    fig.update_layout(
+        title=title,
+        xaxis_title=x_title,
+        yaxis_title="count",
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    return fig
+
+
+def scatter_figure(
+    x: list[float], y: list[float], *, title: str, x_title: str, y_title: str
+) -> Any:
+    """Scatter chart (used for residuals vs predicted)."""
+    import plotly.graph_objects as go
+
+    fig = go.Figure(go.Scatter(x=x, y=y, mode="markers", marker=dict(size=4, opacity=0.5)))
+    fig.add_hline(y=0.0, line_dash="dash", line_color="gray")
+    fig.update_layout(
+        title=title,
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        template="plotly_white",
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    return fig

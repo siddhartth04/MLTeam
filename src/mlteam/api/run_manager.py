@@ -157,6 +157,20 @@ def _execute(
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")
         note("Explainability figures generated", level="success", s=Stage.EXPLAIN)
 
+        # Plain-language insight narration (best-effort; never blocks the run).
+        from mlteam.agents.insight_narrator import narrate_insights
+
+        insights = narrate_insights(
+            client,
+            store,
+            problem=spec,
+            evaluation=result.final_report,
+            explainability=explain_report,
+            run_id=result.initial.run_id,
+        )
+        if insights is not None:
+            note(f"Insights narrated ({len(insights.findings)} findings)", s=Stage.EXPLAIN)
+
         # Deployment bundle (Gate 3 via the dashboard).
         stage(Stage.DEPLOY, StageStatus.ACTIVE)
         from mlteam.agents import read_dataset
@@ -203,6 +217,7 @@ def _execute(
                 best_template_id=pipeline.best_template_id,
                 best_experiment_id=best_key,
                 explainability=explain_report,
+                insights=insights,
                 iterations=tuple(
                     {
                         "index": it.index,

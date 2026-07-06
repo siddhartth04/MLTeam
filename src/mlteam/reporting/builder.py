@@ -20,6 +20,7 @@ from mlteam.contracts import (
     EvaluationReport,
     ExplainabilityReport,
     FinalReport,
+    InsightNarrative,
     ProblemSpec,
     SplitPlan,
     TrainedModel,
@@ -46,6 +47,7 @@ class ReportInputs:
     best_template_id: str
     best_experiment_id: str
     explainability: ExplainabilityReport | None = None
+    insights: InsightNarrative | None = None
     iterations: tuple[dict[str, Any], ...] = field(default_factory=tuple)
 
 
@@ -142,6 +144,8 @@ def build_final_report(
         verdict_label=verdict_label,
         headline_sentence=_headline_sentence(inputs, holdout_metrics),
         headline_metrics=headline_cards,
+        insight_findings=list(inputs.insights.findings) if inputs.insights else [],
+        insight_caveats=list(inputs.insights.caveats) if inputs.insights else [],
         top_features=top_features,
         business_figures=business_figs,
         safety_checks=safety_checks,

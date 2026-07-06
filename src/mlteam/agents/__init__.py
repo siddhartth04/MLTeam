@@ -22,6 +22,7 @@ from mlteam.agents.explainer import explain_model
 from mlteam.agents.feature_engineer import propose_features
 from mlteam.agents.hpo import SEARCH_SPACES, HPOOutcome, tune_experiment
 from mlteam.agents.ingest import ingest_file
+from mlteam.agents.insight_narrator import narrate_insights
 from mlteam.agents.preview import ColumnPreview, column_preview
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
@@ -45,6 +46,7 @@ __all__ = [
     "explain_model",
     "ingest_file",
     "materialize_bundle",
+    "narrate_insights",
     "plan_experiments",
     "plan_split",
     "profile_dataset",

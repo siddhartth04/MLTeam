@@ -33,10 +33,28 @@ class FigureRef(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    kind: str  # "permutation_importance" | "shap_summary" | "partial_dependence"
+    # "permutation_importance" | "shap_summary" | "partial_dependence"
+    # | "residual_hist" | "residual_vs_predicted"
+    kind: str
     title: str
     blob_hash: str = Field(min_length=1)
     feature: str | None = None
+
+
+class ResidualSlice(BaseModel):
+    """Per-group error for one value of a categorical feature (regression).
+
+    Surfaces WHERE a regression model is weakest — a group with a much higher
+    MAE than the rest is exactly what a data scientist would investigate
+    before trusting the model on that segment.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    feature: str
+    value: str
+    mae: float = Field(ge=0.0)
+    n_rows: int = Field(ge=0)
 
 
 class ExplainabilityReport(Artifact):
@@ -45,3 +63,7 @@ class ExplainabilityReport(Artifact):
     importances: tuple[FeatureImportance, ...]
     shap_available: bool = False
     figures: tuple[FigureRef, ...] = ()
+    # Regression-only error analysis; empty for classification or when no
+    # categorical feature was available to slice on. Optional/defaulted so
+    # artifacts stored before this field existed still load.
+    residual_slices: tuple[ResidualSlice, ...] = ()

@@ -40,8 +40,10 @@ from mlteam.contracts.explainability import (
     FeatureImportance,
     FigureRef,
     ImportanceMethod,
+    ResidualSlice,
 )
 from mlteam.contracts.features import FeatureOpType, FeaturePlan, FeatureProposal, FeatureSet
+from mlteam.contracts.insight import InsightNarrative
 from mlteam.contracts.model import TrainedModel
 from mlteam.contracts.outcome import ExperimentOutcome, ExperimentState
 from mlteam.contracts.problem_spec import CostAsymmetry, ProblemSpec, TaskType, is_classification
@@ -85,6 +87,7 @@ ARTIFACT_REGISTRY: dict[str, type[Artifact]] = {
         RunTrace,
         TriageReport,
         ExperimentOutcome,
+        InsightNarrative,
     )
 }
 
@@ -126,11 +129,13 @@ __all__ = [
     "Finding",
     "FindingSeverity",
     "ImportanceMethod",
+    "InsightNarrative",
     "LabelIssueSummary",
     "LeakageCheck",
     "MetricSummary",
     "ProblemSpec",
     "ProfileWarning",
+    "ResidualSlice",
     "RunTrace",
     "SliceMetric",
     "SplitPlan",

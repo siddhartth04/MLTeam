@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import polars as pl
 import structlog
 
 from mlteam.agents.data_io import read_dataset
@@ -18,10 +19,17 @@ from mlteam.contracts import (
     FeatureImportance,
     FigureRef,
     ImportanceMethod,
+    ResidualSlice,
     TrainedModel,
     new_artifact,
 )
-from mlteam.reporting.figures import bar_figure, line_figure, store_figure
+from mlteam.reporting.figures import (
+    bar_figure,
+    histogram_figure,
+    line_figure,
+    scatter_figure,
+    store_figure,
+)
 from mlteam.serving.model_io import load_pipeline
 from mlteam.store.interface import ArtifactStore
 
@@ -29,6 +37,8 @@ _log = structlog.get_logger(__name__)
 
 _TOP_PDP_FEATURES = 3
 _SHAP_MAX_ROWS = 500
+_MAX_RESIDUAL_SLICES = 8
+_MIN_SLICE_ROWS = 5
 
 
 def _permutation_importance(
@@ -99,6 +109,84 @@ def _shap_summary_figure(pipeline: Any, frame: Any, *, seed: int) -> Any:
         return None
 
 
+def _residual_analysis(
+    store: ArtifactStore,
+    pipeline: Any,
+    frame: Any,
+    target: Any,
+    importances: tuple[FeatureImportance, ...],
+    categorical_cols: set[str],
+) -> tuple[list[FigureRef], tuple[ResidualSlice, ...]]:
+    """Regression error analysis: residual distribution, residual-vs-predicted,
+    and per-group MAE on the highest-importance categorical feature.
+
+    TRAIN data only (the holdout stays frozen) — this describes where the
+    model struggles on data it has already seen, which is a lower bound on
+    where it will struggle out of sample, and needs no holdout access.
+    """
+    import numpy as np
+
+    predicted = np.asarray(pipeline.predict(frame), dtype=float)
+    actual = np.asarray(target, dtype=float)
+    residuals = actual - predicted
+
+    figures: list[FigureRef] = [
+        FigureRef(
+            kind="residual_hist",
+            title="Residual distribution",
+            blob_hash=store_figure(
+                store,
+                histogram_figure(
+                    [float(r) for r in residuals],
+                    title="Residual distribution (actual - predicted)",
+                    x_title="residual",
+                ),
+            ),
+        ),
+        FigureRef(
+            kind="residual_vs_predicted",
+            title="Residuals vs predicted",
+            blob_hash=store_figure(
+                store,
+                scatter_figure(
+                    [float(p) for p in predicted],
+                    [float(r) for r in residuals],
+                    title="Residuals vs predicted",
+                    x_title="predicted",
+                    y_title="residual",
+                ),
+            ),
+        ),
+    ]
+
+    # Slice on the highest-importance categorical feature, if any.
+    slice_feature = next(
+        (fi.feature for fi in importances if fi.feature in categorical_cols), None
+    )
+    slices: tuple[ResidualSlice, ...] = ()
+    if slice_feature is not None:
+        abs_res = np.abs(residuals)
+        groups: list[ResidualSlice] = []
+        for value in frame[slice_feature].dropna().unique():
+            mask = (frame[slice_feature] == value).to_numpy()
+            n_rows = int(mask.sum())
+            if n_rows < _MIN_SLICE_ROWS:
+                continue
+            groups.append(
+                ResidualSlice(
+                    feature=slice_feature,
+                    value=str(value),
+                    mae=round(float(abs_res[mask].mean()), 8),
+                    n_rows=n_rows,
+                )
+            )
+        # Worst (highest MAE) first — that's the segment to investigate.
+        groups.sort(key=lambda s: s.mae, reverse=True)
+        slices = tuple(groups[:_MAX_RESIDUAL_SLICES])
+
+    return figures, slices
+
+
 def explain_model(
     store: ArtifactStore,
     model: TrainedModel,
@@ -112,7 +200,16 @@ def explain_model(
     dataset = store.get(train_dataset_id)
     if dataset.target_column is None:
         raise ValueError("explainability needs a dataset with a target column")
-    df = _temporal_to_epoch(read_dataset(store, dataset))
+    raw = read_dataset(store, dataset)
+    # Categorical columns are identified from the ORIGINAL polars schema, before
+    # _temporal_to_epoch turns date columns numeric — so residual slicing only
+    # ever groups on genuinely categorical features.
+    categorical_cols = {
+        name
+        for name, dtype in raw.schema.items()
+        if name != dataset.target_column and dtype in (pl.String, pl.Categorical, pl.Boolean)
+    }
+    df = _temporal_to_epoch(raw)
     frame = df.to_pandas()
     target = frame.pop(dataset.target_column)
 
@@ -162,6 +259,18 @@ def explain_model(
             )
         )
 
+    # Regression error analysis: residual distribution, residual-vs-predicted,
+    # and worst per-group MAE. Best-effort — never blocks the report.
+    residual_slices: tuple[ResidualSlice, ...] = ()
+    if not task_is_classification:
+        try:
+            residual_figs, residual_slices = _residual_analysis(
+                store, pipeline, frame, target, importances, categorical_cols
+            )
+            figures.extend(residual_figs)
+        except Exception as exc:
+            _log.info("residual_analysis_skipped", error=str(exc))
+
     report = new_artifact(
         ExplainabilityReport,
         producer_agent="explainer",
@@ -172,6 +281,7 @@ def explain_model(
         importances=importances,
         shap_available=shap_available,
         figures=tuple(figures),
+        residual_slices=residual_slices,
     )
     store.put(report)
     _log.info(
@@ -179,5 +289,6 @@ def explain_model(
         top_feature=importances[0].feature if importances else None,
         figures=len(figures),
         shap=shap_available,
+        residual_slices=len(residual_slices),
     )
     return report

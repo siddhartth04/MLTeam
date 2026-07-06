@@ -44,6 +44,15 @@ _BUSINESS_TEMPLATE = """<!doctype html>
 <span class="verdict {{ verdict }}">{{ verdict_label }}</span>.</p>
 <p>{{ headline_sentence }}</p>
 
+{% if insight_findings %}
+<h2>Key findings</h2>
+<ul>{% for f in insight_findings %}<li>{{ f }}</li>{% endfor %}</ul>
+{% if insight_caveats %}
+<p class="muted"><strong>Worth knowing:</strong></p>
+<ul class="muted">{% for c in insight_caveats %}<li>{{ c }}</li>{% endfor %}</ul>
+{% endif %}
+{% endif %}
+
 <h2>Headline results</h2>
 <div class="metric-grid">
 {% for m in headline_metrics %}

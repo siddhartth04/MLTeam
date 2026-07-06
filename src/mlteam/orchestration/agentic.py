@@ -28,6 +28,7 @@ from mlteam.agents.experiment_planner import plan_experiments
 from mlteam.agents.feature_engineer import propose_features
 from mlteam.agents.feature_executor import execute_feature_plan
 from mlteam.agents.ingest import ingest_file
+from mlteam.agents.preview import column_preview
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
 from mlteam.agents.splitter import detect_time_column, plan_split
@@ -131,8 +132,14 @@ def run_agentic_pipeline(
 
     # -- Requirement Understanding + GATE 1 ---------------------------------
     columns = _read_columns(data_path)
+    previews = column_preview(data_path)
     spec = understand_requirements(
-        client, store, goal_text=goal_text, dataset_columns=columns, run_id=run_id
+        client,
+        store,
+        goal_text=goal_text,
+        dataset_columns=columns,
+        run_id=run_id,
+        column_profile=previews,
     )
     require_approval(
         gate,

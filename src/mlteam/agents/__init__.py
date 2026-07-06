@@ -18,6 +18,7 @@ from mlteam.agents.explainer import explain_model
 from mlteam.agents.feature_engineer import propose_features
 from mlteam.agents.hpo import SEARCH_SPACES, HPOOutcome, tune_experiment
 from mlteam.agents.ingest import ingest_file
+from mlteam.agents.preview import ColumnPreview, column_preview
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
 from mlteam.agents.splitter import plan_split
@@ -26,9 +27,11 @@ from mlteam.agents.trainer import TrainResult, compute_env_hash, train_experimen
 __all__ = [
     "EXECUTABLE_OP_TYPES",
     "SEARCH_SPACES",
+    "ColumnPreview",
     "HPOOutcome",
     "TrainResult",
     "build_deployment_bundle",
+    "column_preview",
     "compute_env_hash",
     "compute_quantitative_gates",
     "critique_evaluation",

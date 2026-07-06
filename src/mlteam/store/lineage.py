@@ -28,8 +28,14 @@ CREATE TABLE IF NOT EXISTS parents (
     parent_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
     PRIMARY KEY (child_id, parent_id)
 );
+CREATE TABLE IF NOT EXISTS run_artifacts (
+    run_id      TEXT NOT NULL,
+    artifact_id TEXT NOT NULL REFERENCES artifacts(artifact_id),
+    PRIMARY KEY (run_id, artifact_id)
+);
 CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(artifact_type);
 CREATE INDEX IF NOT EXISTS idx_parents_parent ON parents(parent_id);
+CREATE INDEX IF NOT EXISTS idx_run_artifacts_run ON run_artifacts(run_id);
 """
 
 
@@ -74,6 +80,15 @@ class LineageIndex:
 
         Parent ids must already be recorded — dangling lineage edges would
         silently corrupt the provenance graph, so they fail fast instead.
+
+        ``artifacts.run_id`` stays "first producer" provenance: content
+        addressing means two runs over identical inputs mint the SAME
+        artifact id, and ``INSERT OR IGNORE`` means only the first writer's
+        run_id is kept there. The ``run_artifacts`` membership table below is
+        written on every call regardless — a many-to-many pairing so a later
+        run that reuses/dedupes an earlier run's artifact still sees it in
+        its OWN lineage graph, instead of the graph silently belonging to
+        whichever run happened to produce that artifact first.
         """
         created = meta.created_at
         created_str = created.isoformat() if isinstance(created, datetime) else str(created)
@@ -95,12 +110,28 @@ class LineageIndex:
                     "INSERT OR IGNORE INTO parents VALUES (?, ?)",
                     [(meta.artifact_id, parent) for parent in meta.parent_ids],
                 )
+                conn.execute(
+                    "INSERT OR IGNORE INTO run_artifacts VALUES (?, ?)",
+                    (meta.run_id, meta.artifact_id),
+                )
         except sqlite3.IntegrityError as exc:
             raise ValueError(
                 f"cannot record lineage for '{meta.artifact_id}': one of its "
                 f"parents {meta.parent_ids} is not in the lineage index; "
                 "store parent artifacts before their children"
             ) from exc
+
+    def artifact_ids_for_run(self, run_id: str) -> tuple[str, ...]:
+        """Every artifact ever written under this run_id, including shared
+        (deduped) artifacts first produced by a different run. Empty for
+        pre-existing stores with no membership rows recorded yet — callers
+        should fall back to the legacy ``artifacts.run_id`` filter in that
+        case so old runs keep rendering."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT artifact_id FROM run_artifacts WHERE run_id = ?", (run_id,)
+            ).fetchall()
+        return tuple(row[0] for row in rows)
 
     def get_record(self, artifact_id: str) -> LineageRecord | None:
         with self._connect() as conn:

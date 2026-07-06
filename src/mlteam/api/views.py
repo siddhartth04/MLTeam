@@ -34,17 +34,30 @@ def artifact_summary(record: LineageRecord) -> dict[str, Any]:
     }
 
 
+def _run_scoped_ids(store: GuardedArtifactStore, run_id: str) -> frozenset[str] | None:
+    """The membership-table view of a run's artifacts, or None to signal
+    "no membership rows recorded" (pre-existing store) so callers fall back
+    to the legacy artifacts.run_id filter instead of showing an empty run."""
+    ids = store._inner.lineage.artifact_ids_for_run(run_id)
+    return frozenset(ids) if ids else None
+
+
 def list_artifacts(
     store: GuardedArtifactStore, *, run_id: str | None = None, artifact_type: str | None = None
 ) -> list[dict[str, Any]]:
+    scoped = _run_scoped_ids(store, run_id) if run_id is not None else None
     ids = store.list_ids(artifact_type)
     records = [store._inner.lineage.get_record(aid) for aid in ids]
     out = []
     for record in records:
         if record is None:
             continue
-        if run_id is not None and record.run_id != run_id:
-            continue
+        if run_id is not None:
+            in_scope = (
+                record.artifact_id in scoped if scoped is not None else record.run_id == run_id
+            )
+            if not in_scope:
+                continue
         out.append(artifact_summary(record))
     out.sort(key=lambda a: a["created_at"])
     return out
@@ -73,13 +86,18 @@ def artifact_detail(store: GuardedArtifactStore, artifact_id: str) -> dict[str, 
 def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dict[str, Any]:
     """Nodes + edges for the artifact-lineage explorer."""
     lineage = store._inner.lineage
+    scoped = _run_scoped_ids(store, run_id) if run_id is not None else None
     ids = store.list_ids()
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
     for aid in ids:
         record = lineage.get_record(aid)
-        if record is None or (run_id is not None and record.run_id != run_id):
+        if record is None:
             continue
+        if run_id is not None:
+            in_scope = aid in scoped if scoped is not None else record.run_id == run_id
+            if not in_scope:
+                continue
         nodes.append(
             {
                 "id": aid,

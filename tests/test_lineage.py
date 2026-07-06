@@ -60,3 +60,34 @@ def test_lineage_survives_reopen(tmp_path, make_dataset):
 
     reopened = LocalArtifactStore(root)
     assert reopened.lineage.get_record(dataset.meta.artifact_id) is not None
+
+
+def test_artifact_ids_for_run_returns_only_that_runs_membership(
+    local_store: LocalArtifactStore, make_dataset
+):
+    a = make_dataset(blob_hash="a" * 64, run_id="run-1")
+    b = make_dataset(blob_hash="b" * 64, run_id="run-2")
+    local_store.put(a)
+    local_store.put(b)
+
+    assert local_store.lineage.artifact_ids_for_run("run-1") == (a.meta.artifact_id,)
+    assert local_store.lineage.artifact_ids_for_run("run-2") == (b.meta.artifact_id,)
+    assert local_store.lineage.artifact_ids_for_run("run-missing") == ()
+
+
+def test_artifact_ids_for_run_includes_a_shared_deduped_artifact(
+    local_store: LocalArtifactStore, make_dataset
+):
+    """Phase 4 (dashboard UX plan) regression: content-addressing means two
+    runs over identical inputs mint the SAME artifact id. artifacts.run_id
+    (first-writer-wins) would attribute it only to run-1; run_artifacts must
+    show it under BOTH runs, since both runs genuinely used it."""
+    shared = make_dataset(blob_hash="shared" + "0" * 58, run_id="run-1")
+    local_store.put(shared)
+    # A second run reuses the identical artifact (same content-addressed id).
+    local_store.lineage.record(shared.meta.model_copy(update={"run_id": "run-2"}))
+
+    run1_ids = local_store.lineage.artifact_ids_for_run("run-1")
+    run2_ids = local_store.lineage.artifact_ids_for_run("run-2")
+    assert shared.meta.artifact_id in run1_ids
+    assert shared.meta.artifact_id in run2_ids

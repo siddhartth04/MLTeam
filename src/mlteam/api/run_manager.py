@@ -17,10 +17,13 @@ import structlog
 
 from mlteam.api.events import LogEvent, RunStatus, Stage, StageStatus
 from mlteam.api.registry import REGISTRY, RunRegistry
+from mlteam.contracts import ProblemSpec, TrainedModel
 from mlteam.llm.client import LLMClient
 from mlteam.llm.transport import Transport
 from mlteam.orchestration.gates import ApprovalGate, GateDecision, GateName, GateRejectedError
-from mlteam.store import open_store
+from mlteam.orchestration.pipeline import PipelineResult
+from mlteam.store import ArtifactStore, open_store
+from mlteam.store.ledger import record_outcome
 
 _log = structlog.get_logger(__name__)
 
@@ -29,6 +32,46 @@ _GATE_TO_STAGE = {
     GateName.TRAINING_PLAN: Stage.GATE_PLAN,
     GateName.DEPLOYMENT: Stage.GATE_DEPLOY,
 }
+
+
+def _record_ledger_outcome(
+    store: ArtifactStore,
+    *,
+    spec: ProblemSpec,
+    pipeline: PipelineResult,
+    best_model: TrainedModel,
+) -> None:
+    """Best-effort write to the outcome ledger — never fails the run."""
+    try:
+        from mlteam.agents.deployer import build_deployment_dossier
+        from mlteam.evaluation.results import list_experiment_outcomes
+
+        train_profile = store.get(pipeline.train_profile_id)
+        n_features = len(train_profile.columns)
+        n_categorical = sum(1 for c in train_profile.columns if c.dtype == "String")
+        outcomes = list_experiment_outcomes(store, pipeline.run_id)
+        dossier = build_deployment_dossier(
+            model=best_model,
+            problem=spec,
+            train_dataset_id=pipeline.modeling_dataset_id,
+            split_plan_id=pipeline.split_plan_id,
+            outcomes=outcomes,
+        )
+        margin = None
+        if dossier["winner_margin"] and dossier["winner_margin"]["vs_runner_up"]:
+            margin = dossier["winner_margin"]["vs_runner_up"]["improvement"]
+        record_outcome(
+            store.root,
+            task_type=spec.task_type.value,
+            n_rows=store.get(pipeline.modeling_dataset_id).n_rows,
+            n_features=n_features,
+            categorical_share=n_categorical / n_features if n_features else 0.0,
+            winner_template=best_model.template_id,
+            margin_vs_second=margin,
+            primary_metric=spec.primary_metric,
+        )
+    except Exception:  # ledger is a nice-to-have; never breaks a completed run
+        _log.warning("ledger_write_skipped", exc_info=True)
 
 
 class RegistryGate:
@@ -237,6 +280,8 @@ def _execute(
         )
         stage(Stage.REPORT, StageStatus.DONE)
         note("Final report generated", level="success", s=Stage.REPORT)
+
+        _record_ledger_outcome(store, spec=spec, pipeline=pipeline, best_model=best_model)
 
         record = registry.get(ui_run_id)
         if record is not None:

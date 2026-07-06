@@ -21,6 +21,11 @@ class ArtifactStore(Protocol):
     by the SHA-256 of their content.
     """
 
+    @property
+    def root(self) -> Path:
+        """The store's root directory on disk."""
+        ...
+
     def put(self, artifact: Artifact) -> ArtifactRef:
         """Persist an artifact and record its lineage. Idempotent by content."""
         ...

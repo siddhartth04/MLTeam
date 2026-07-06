@@ -255,6 +255,7 @@ def run_agentic_pipeline(
             problem=spec,
             n_rows=modeling_dataset.n_rows,
             run_id=run_id,
+            store_root=store.root,
         )
         specs = plan.experiments
         plan_rationale = plan.rationale

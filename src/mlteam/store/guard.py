@@ -96,6 +96,11 @@ class GuardedArtifactStore:
             conn.executescript(_SCHEMA)
         self.repair()
 
+    @property
+    def root(self) -> Path:
+        """The store root directory (delegates to the wrapped store)."""
+        return self._inner.root
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         """Connection that commits/rolls back AND closes on exit (see lineage)."""

@@ -193,6 +193,10 @@ def seed_demo_run(
         stage(Stage.REPORT, StageStatus.DONE)
         note("Final report generated", "success", Stage.REPORT)
 
+        from mlteam.api.run_manager import _record_ledger_outcome
+
+        _record_ledger_outcome(store, spec=spec, pipeline=pipeline, best_model=result.best_model)
+
         record = registry.get(DEMO_UI_RUN_ID)
         if record is not None:
             record.result_run_id = result.initial.run_id

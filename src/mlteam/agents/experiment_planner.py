@@ -9,6 +9,7 @@ The plan then awaits HUMAN GATE 2 with its cost estimate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -26,6 +27,7 @@ from mlteam.contracts import (
 from mlteam.llm.client import LLMClient
 from mlteam.llm.summaries import profile_summary
 from mlteam.store.interface import ArtifactStore
+from mlteam.store.ledger import matching_priors
 from mlteam.templates.registry import get_template, list_templates
 
 SYSTEM_PROMPT = """You are the Experiment Planner of an autonomous ML engineering \
@@ -63,6 +65,13 @@ WHY (e.g. "svm_default: skipped, >20k rows makes its quadratic cost prohibitive"
 dominate"). Cover at least: a linear model, svm/knn, mlp, and any ensemble/\
 stacking template not chosen — a reviewer must be able to see the plan's negative \
 space, not just what was picked.
+- prior_outcomes, when present, are past runs on similarly-sized data of the \
+same task type: which template won and by how much it beat the runner-up. \
+Priors may REORDER your candidates and adjust budgets (e.g. try a repeatedly- \
+winning template earlier) — they may NEVER cause you to skip the mandatory \
+baselines, drop a candidate family without recording it in excluded_templates, \
+or treat a past winner as guaranteed; every planned experiment is still \
+evaluated on ITS OWN merits against this run's data.
 Return only JSON matching the schema."""
 
 # Rough wall-time heuristics (seconds) per 1k rows, by template.
@@ -247,8 +256,16 @@ def plan_experiments(
     problem: ProblemSpec,
     n_rows: int,
     run_id: str,
+    store_root: Path | None = None,
 ) -> ExperimentPlan:
-    """Draft, validate, and store an ExperimentPlan (unapproved until Gate 2)."""
+    """Draft, validate, and store an ExperimentPlan (unapproved until Gate 2).
+
+    ``store_root``, when given, enables cross-run priors: up to 5 past runs
+    on similarly-sized data of the same task type are read from the outcome
+    ledger and included in the LLM payload so the planner can reorder
+    candidates on experience — never to skip baselines or coverage, which
+    stay code-enforced by the plan validator regardless of what the priors say.
+    """
     registry = [
         {"template_id": t.template_id, "description": t.description}
         for t in list_templates(problem.task_type)
@@ -280,6 +297,12 @@ def plan_experiments(
         if not all(e.is_baseline for e in draft.experiments[:2]):
             raise ValueError("the first two experiments must have is_baseline=true")
 
+    priors = (
+        matching_priors(store_root, task_type=problem.task_type.value, n_rows=n_rows)
+        if store_root is not None
+        else []
+    )
+
     result = client.structured(
         agent="experiment-planner",
         system_prompt=SYSTEM_PROMPT,
@@ -291,6 +314,15 @@ def plan_experiments(
             "n_rows": n_rows,
             "template_registry": registry,
             "profile": profile_summary(profile),
+            "prior_outcomes": [
+                {
+                    "winner_template": p["winner_template"],
+                    "margin_vs_second": p["margin_vs_second"],
+                    "n_features": p["n_features"],
+                    "categorical_share": p["categorical_share"],
+                }
+                for p in priors
+            ],
         },
         schema=ExperimentPlanDraft,
         post_validate=_post_validate,

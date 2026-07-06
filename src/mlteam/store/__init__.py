@@ -9,6 +9,7 @@ from mlteam.store.guard import (
     HoldoutAccessError,
 )
 from mlteam.store.interface import ArtifactNotFoundError, ArtifactStore
+from mlteam.store.ledger import LedgerEntry, matching_priors, read_ledger, record_outcome
 from mlteam.store.lineage import LineageIndex, LineageRecord
 from mlteam.store.local import LocalArtifactStore
 
@@ -25,8 +26,12 @@ __all__ = [
     "GuardAccessRecord",
     "GuardedArtifactStore",
     "HoldoutAccessError",
+    "LedgerEntry",
     "LineageIndex",
     "LineageRecord",
     "LocalArtifactStore",
+    "matching_priors",
     "open_store",
+    "read_ledger",
+    "record_outcome",
 ]

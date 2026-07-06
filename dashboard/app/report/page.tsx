@@ -5,7 +5,7 @@ import { useState } from "react";
 import { PlotlyFigure } from "@/components/PlotlyFigure";
 import { useActiveRun } from "@/components/RunContext";
 import { EmptyState, Panel, SectionTitle, StatTile, VerdictBadge } from "@/components/primitives";
-import { reportUrl, useCritique, useExplainability, useRun } from "@/lib/api";
+import { reportDownloadUrl, reportUrl, useCritique, useExplainability, useRun } from "@/lib/api";
 
 export default function ReportPage() {
   const { runId } = useActiveRun();
@@ -102,7 +102,10 @@ export default function ReportPage() {
               sandbox="allow-scripts allow-same-origin"
               className="report-frame h-[720px] w-full border-0"
             />
-            <div className="mt-3 text-right">
+            <div className="mt-3 flex justify-end gap-3">
+              <a href={reportDownloadUrl(reportId, tab)} download className="btn-ghost text-xs">
+                ⬇ Download
+              </a>
               <a
                 href={reportUrl(reportId, tab)}
                 target="_blank"

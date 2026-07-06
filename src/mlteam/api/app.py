@@ -265,6 +265,23 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         html = _store(settings).blob_path(report.technical_report_blob).read_text("utf-8")
         return HTMLResponse(html)
 
+    @app.get("/api/reports/{report_id}/{kind}/download", response_class=HTMLResponse)
+    def download_report(report_id: str, kind: str) -> HTMLResponse:
+        if kind not in ("business", "technical"):
+            raise HTTPException(404, "unknown report kind")
+        report = final_report_view(_store(settings), report_id)
+        if report is None:
+            raise HTTPException(404, "report not found")
+        blob = report.business_report_blob if kind == "business" else report.technical_report_blob
+        html = _store(settings).blob_path(blob).read_text("utf-8")
+        short_id = report_id[:12]
+        return HTMLResponse(
+            html,
+            headers={
+                "Content-Disposition": f'attachment; filename="report-{kind}-{short_id}.html"'
+            },
+        )
+
     @app.get("/api/figures/{blob_hash}", response_class=PlainTextResponse)
     def figure(blob_hash: str) -> PlainTextResponse:
         try:

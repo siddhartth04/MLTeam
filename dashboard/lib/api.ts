@@ -125,3 +125,7 @@ export function figureUrl(blobHash: string): string {
 export function reportUrl(reportId: string, kind: "business" | "technical"): string {
   return `/api/reports/${enc(reportId)}/${kind}`;
 }
+
+export function reportDownloadUrl(reportId: string, kind: "business" | "technical"): string {
+  return `/api/reports/${enc(reportId)}/${kind}/download`;
+}

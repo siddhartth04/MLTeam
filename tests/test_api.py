@@ -138,6 +138,38 @@ def test_reports_render_as_html(client, tmp_path):
     assert "Holdout" in technical.text
 
 
+def test_reports_are_downloadable_and_self_contained(client, tmp_path):
+    api, reg, _ = client
+    ui_run_id = _launch(client, tmp_path)
+    _wait_for_completion(reg, ui_run_id)
+    report_id = api.get(f"/api/runs/{ui_run_id}").json()["final_report_id"]
+
+    business = api.get(f"/api/reports/{report_id}/business/download")
+    assert business.status_code == 200
+    assert "attachment" in business.headers["content-disposition"]
+    assert f"report-business-{report_id[:12]}.html" in business.headers["content-disposition"]
+    # Self-contained: inline CSS + embedded Plotly script, not a broken shell.
+    assert "<style" in business.text
+    assert "<script" in business.text
+
+    technical = api.get(f"/api/reports/{report_id}/technical/download")
+    assert technical.status_code == 200
+    assert "attachment" in technical.headers["content-disposition"]
+
+
+def test_download_unknown_report_is_404(client):
+    api, _, _ = client
+    assert api.get("/api/reports/does-not-exist/business/download").status_code == 404
+
+
+def test_download_unknown_kind_is_404(client, tmp_path):
+    api, reg, _ = client
+    ui_run_id = _launch(client, tmp_path)
+    _wait_for_completion(reg, ui_run_id)
+    report_id = api.get(f"/api/runs/{ui_run_id}").json()["final_report_id"]
+    assert api.get(f"/api/reports/{report_id}/nonsense/download").status_code == 404
+
+
 def test_gate_approval_flow(client, tmp_path):
     """A run whose gate blocks must surface in /api/gates and resume on approve."""
     import threading

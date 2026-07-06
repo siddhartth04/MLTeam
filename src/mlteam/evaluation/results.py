@@ -63,10 +63,18 @@ def store_experiment_outcome(
 def list_experiment_outcomes(
     store: GuardedArtifactStore, run_id: str
 ) -> tuple[ExperimentOutcome, ...]:
-    """Every ExperimentOutcome recorded for a run, in no particular order."""
+    """Every ExperimentOutcome recorded for a run, in no particular order.
+
+    Scoped via the run_artifacts membership table (falling back to the
+    legacy first-writer ``artifacts.run_id`` filter for pre-membership-table
+    stores) — NOT a raw ``record.run_id == run_id`` check. Content-addressed
+    outcomes (e.g. a screening probe byte-identical to an earlier run's) can
+    be first-attributed to a different run_id while still genuinely
+    belonging to this one; the membership table is what makes that visible.
+    """
+    scoped = store.artifact_ids_for_run(run_id)
     outcomes = []
     for aid in store.list_ids(ExperimentOutcome.artifact_type()):
-        record = store._inner.lineage.get_record(aid)
-        if record is not None and record.run_id == run_id:
+        if store.is_in_run(aid, run_id, scoped):
             outcomes.append(store.get(aid))
     return tuple(outcomes)

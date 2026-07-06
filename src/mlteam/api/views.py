@@ -34,30 +34,18 @@ def artifact_summary(record: LineageRecord) -> dict[str, Any]:
     }
 
 
-def _run_scoped_ids(store: GuardedArtifactStore, run_id: str) -> frozenset[str] | None:
-    """The membership-table view of a run's artifacts, or None to signal
-    "no membership rows recorded" (pre-existing store) so callers fall back
-    to the legacy artifacts.run_id filter instead of showing an empty run."""
-    ids = store._inner.lineage.artifact_ids_for_run(run_id)
-    return frozenset(ids) if ids else None
-
-
 def list_artifacts(
     store: GuardedArtifactStore, *, run_id: str | None = None, artifact_type: str | None = None
 ) -> list[dict[str, Any]]:
-    scoped = _run_scoped_ids(store, run_id) if run_id is not None else None
+    scoped = store.artifact_ids_for_run(run_id) if run_id is not None else None
     ids = store.list_ids(artifact_type)
     records = [store._inner.lineage.get_record(aid) for aid in ids]
     out = []
     for record in records:
         if record is None:
             continue
-        if run_id is not None:
-            in_scope = (
-                record.artifact_id in scoped if scoped is not None else record.run_id == run_id
-            )
-            if not in_scope:
-                continue
+        if run_id is not None and not store.is_in_run(record.artifact_id, run_id, scoped):
+            continue
         out.append(artifact_summary(record))
     out.sort(key=lambda a: a["created_at"])
     return out
@@ -86,7 +74,7 @@ def artifact_detail(store: GuardedArtifactStore, artifact_id: str) -> dict[str, 
 def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dict[str, Any]:
     """Nodes + edges for the artifact-lineage explorer."""
     lineage = store._inner.lineage
-    scoped = _run_scoped_ids(store, run_id) if run_id is not None else None
+    scoped = store.artifact_ids_for_run(run_id) if run_id is not None else None
     ids = store.list_ids()
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
@@ -94,10 +82,8 @@ def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dic
         record = lineage.get_record(aid)
         if record is None:
             continue
-        if run_id is not None:
-            in_scope = aid in scoped if scoped is not None else record.run_id == run_id
-            if not in_scope:
-                continue
+        if run_id is not None and not store.is_in_run(aid, run_id, scoped):
+            continue
         nodes.append(
             {
                 "id": aid,
@@ -124,9 +110,10 @@ def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str,
     join (winner-only metrics) for runs recorded before outcomes existed.
     """
     rows: list[dict[str, Any]] = []
+    scoped = store.artifact_ids_for_run(run_id)
     for aid in store.list_ids(ExperimentOutcome.artifact_type()):
         record = store._inner.lineage.get_record(aid)
-        if record is None or record.run_id != run_id:
+        if record is None or not store.is_in_run(aid, run_id, scoped):
             continue
         outcome: ExperimentOutcome = store.get(aid)
         rows.append(
@@ -151,9 +138,10 @@ def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str,
 def _legacy_experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str, Any]]:
     """Pre-ExperimentOutcome fallback: winner-only metrics via TrainedModel."""
     rows: list[dict[str, Any]] = []
+    scoped = store.artifact_ids_for_run(run_id)
     for aid in store.list_ids(TrainedModel.artifact_type()):
         record = store._inner.lineage.get_record(aid)
-        if record is None or record.run_id != run_id:
+        if record is None or not store.is_in_run(aid, run_id, scoped):
             continue
         model: TrainedModel = store.get(aid)
         report = _evaluation_for_model(store, aid, run_id)
@@ -182,9 +170,9 @@ def _legacy_experiments_view(store: GuardedArtifactStore, run_id: str) -> list[d
 def _evaluation_for_model(
     store: GuardedArtifactStore, model_id: str, run_id: str
 ) -> EvaluationReport | None:
+    scoped = store.artifact_ids_for_run(run_id)
     for aid in store.list_ids(EvaluationReport.artifact_type()):
-        record = store._inner.lineage.get_record(aid)
-        if record is None or record.run_id != run_id:
+        if not store.is_in_run(aid, run_id, scoped):
             continue
         report: EvaluationReport = store.get(aid)
         if report.model_ref.artifact_id == model_id:
@@ -203,9 +191,10 @@ def evaluation_view(store: GuardedArtifactStore, artifact_id: str) -> dict[str, 
 def critique_view(store: GuardedArtifactStore, run_id: str) -> dict[str, Any] | None:
     latest: CritiqueReport | None = None
     latest_at = ""
+    scoped = store.artifact_ids_for_run(run_id)
     for aid in store.list_ids(CritiqueReport.artifact_type()):
         record = store._inner.lineage.get_record(aid)
-        if record is None or record.run_id != run_id:
+        if record is None or not store.is_in_run(aid, run_id, scoped):
             continue
         if record.created_at >= latest_at:
             latest_at = record.created_at
@@ -215,9 +204,9 @@ def critique_view(store: GuardedArtifactStore, run_id: str) -> dict[str, Any] | 
 
 def problem_spec_view(store: GuardedArtifactStore, run_id: str) -> dict[str, Any] | None:
     confirmed: dict[str, Any] | None = None
+    scoped = store.artifact_ids_for_run(run_id)
     for aid in store.list_ids(ProblemSpec.artifact_type()):
-        record = store._inner.lineage.get_record(aid)
-        if record is None or record.run_id != run_id:
+        if not store.is_in_run(aid, run_id, scoped):
             continue
         spec: ProblemSpec = store.get(aid)
         payload = spec.payload_dict()
@@ -228,9 +217,9 @@ def problem_spec_view(store: GuardedArtifactStore, run_id: str) -> dict[str, Any
 
 
 def explainability_view(store: GuardedArtifactStore, run_id: str) -> dict[str, Any] | None:
+    scoped = store.artifact_ids_for_run(run_id)
     for aid in store.list_ids(ExplainabilityReport.artifact_type()):
-        record = store._inner.lineage.get_record(aid)
-        if record is None or record.run_id != run_id:
+        if not store.is_in_run(aid, run_id, scoped):
             continue
         report: ExplainabilityReport = store.get(aid)
         return {

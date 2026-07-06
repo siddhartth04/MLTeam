@@ -241,6 +241,27 @@ class GuardedArtifactStore:
             for record in self.access_log()
         )
 
+    # -- run scoping --------------------------------------------------------
+
+    def artifact_ids_for_run(self, run_id: str) -> frozenset[str] | None:
+        """The run_artifacts membership-table view of a run's artifacts, or
+        None to signal "no membership rows recorded" (a store written before
+        the membership table existed) so callers fall back to the legacy
+        ``artifacts.run_id`` (first-writer-wins) filter instead of showing an
+        empty run. This is the ONE place "does artifact X belong to run Y?"
+        is decided — every run-scoped view/query must go through it rather
+        than re-deriving the fallback logic at each call site."""
+        ids = self._inner.lineage.artifact_ids_for_run(run_id)
+        return frozenset(ids) if ids else None
+
+    def is_in_run(self, artifact_id: str, run_id: str, scoped: frozenset[str] | None) -> bool:
+        """Membership check against a scope already fetched via
+        ``artifact_ids_for_run`` (fetch once per run, check many artifacts)."""
+        if scoped is not None:
+            return artifact_id in scoped
+        record = self._inner.lineage.get_record(artifact_id)
+        return record is not None and record.run_id == run_id
+
 
 class _UnlockedView:
     """Read view used ONLY inside final_reporting_access; logs granted reads."""

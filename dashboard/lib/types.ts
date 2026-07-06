@@ -149,6 +149,39 @@ export interface ExcludedTemplate {
   reason: string;
 }
 
+export interface DossierComparisonRow {
+  experiment_id: string;
+  template_id: string;
+  state: string;
+  primary_metric: string;
+  mean: number | null;
+  std: number | null;
+  is_winner: boolean;
+}
+
+export interface DossierWinnerMargin {
+  vs_runner_up: { template_id: string; improvement: number } | null;
+  vs_dummy: number | null;
+}
+
+export interface DossierTopFeature {
+  feature: string;
+  importance: number;
+}
+
+export interface DossierCritique {
+  verdict: string;
+  findings: { severity: string; category: string; evidence: string }[];
+}
+
+export interface DeploymentDossier {
+  comparison: DossierComparisonRow[];
+  winner_margin: DossierWinnerMargin | null;
+  top_features: DossierTopFeature[];
+  critique: DossierCritique | null;
+  lineage: { model_id: string; dataset_id: string; split_plan_id: string | null };
+}
+
 export interface PendingGate {
   ui_run_id: string;
   stage: string;

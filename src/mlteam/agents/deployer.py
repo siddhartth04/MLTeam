@@ -16,12 +16,18 @@ import structlog
 
 from mlteam.agents.data_io import read_dataset
 from mlteam.contracts import (
+    CritiqueReport,
     DataProfile,
     DeploymentBundle,
+    EvaluationReport,
+    ExperimentOutcome,
+    ExperimentState,
+    ExplainabilityReport,
     ProblemSpec,
     TrainedModel,
     new_artifact,
 )
+from mlteam.evaluation.metrics import is_higher_better
 from mlteam.orchestration.gates import ApprovalGate, GateName, require_approval
 from mlteam.serving.app_template import render_app
 from mlteam.serving.dockerfile import render_dockerfile, render_requirements
@@ -29,6 +35,128 @@ from mlteam.serving.schema import build_inference_schema_spec, load_spec, serial
 from mlteam.store.interface import ArtifactStore
 
 _log = structlog.get_logger(__name__)
+
+_TOP_FEATURES = 5
+
+
+def _metric_mean(outcome: ExperimentOutcome, metric: str) -> float | None:
+    return next((m.mean for m in outcome.cv_metrics if m.name == metric), None)
+
+
+def _signed_improvement(metric: str, better: float, worse: float) -> float:
+    """Positive whenever ``better`` actually is better, regardless of the
+    metric's own direction (so a dossier reader never has to remember which
+    metrics are higher-is-better)."""
+    return (better - worse) if is_higher_better(metric) else (worse - better)
+
+
+def build_deployment_dossier(
+    *,
+    model: TrainedModel,
+    problem: ProblemSpec,
+    train_dataset_id: str,
+    split_plan_id: str | None,
+    outcomes: tuple[ExperimentOutcome, ...] = (),
+    evaluation: EvaluationReport | None = None,
+    explainability: ExplainabilityReport | None = None,
+    critique: CritiqueReport | None = None,
+) -> dict[str, Any]:
+    """Assemble the evidence a human needs to answer "why trust this model?"
+
+    Pure and deterministic — no LLM, no store access beyond what's already
+    been loaded by the caller — so it's independently testable and never
+    adds latency or cost to Gate 3.
+    """
+    primary = problem.primary_metric
+    completed = [o for o in outcomes if o.state == ExperimentState.COMPLETED]
+    dummy = next((o for o in completed if o.template_id == "dummy_baseline"), None)
+    candidates = [o for o in completed if o.template_id != "dummy_baseline"]
+    ranked = sorted(
+        (o for o in candidates if _metric_mean(o, primary) is not None),
+        key=lambda o: _metric_mean(o, primary),
+        reverse=is_higher_better(primary),
+    )
+
+    comparison = [
+        {
+            "experiment_id": o.experiment_id,
+            "template_id": o.template_id,
+            "state": o.state.value,
+            "primary_metric": primary,
+            "mean": _metric_mean(o, primary),
+            "std": next((m.std for m in o.cv_metrics if m.name == primary), None),
+            "is_winner": o.experiment_id == model.experiment_id,
+        }
+        for o in completed
+    ] + [
+        {
+            "experiment_id": o.experiment_id,
+            "template_id": o.template_id,
+            "state": o.state.value,
+            "primary_metric": primary,
+            "mean": None,
+            "std": None,
+            "is_winner": False,
+        }
+        for o in outcomes
+        if o.state != ExperimentState.COMPLETED
+    ]
+
+    winner_margin: dict[str, Any] | None = None
+    if len(ranked) >= 1:
+        winner = ranked[0]
+        winner_value = _metric_mean(winner, primary)
+        vs_runner_up = None
+        if len(ranked) >= 2:
+            runner_up = ranked[1]
+            runner_up_value = _metric_mean(runner_up, primary)
+            vs_runner_up = {
+                "template_id": runner_up.template_id,
+                "improvement": _signed_improvement(primary, winner_value, runner_up_value),
+            }
+        vs_dummy = None
+        if dummy is not None:
+            dummy_value = _metric_mean(dummy, primary)
+            if dummy_value is not None:
+                vs_dummy = _signed_improvement(primary, winner_value, dummy_value)
+        winner_margin = {
+            "vs_runner_up": vs_runner_up,
+            "vs_dummy": vs_dummy,
+        }
+
+    top_features = []
+    if explainability is not None:
+        top_features = [
+            {"feature": f.feature, "importance": f.importance}
+            for f in sorted(explainability.importances, key=lambda f: f.importance, reverse=True)[
+                :_TOP_FEATURES
+            ]
+        ]
+
+    critique_summary = None
+    if critique is not None:
+        critique_summary = {
+            "verdict": critique.verdict.value,
+            "findings": [
+                {"severity": f.severity.value, "category": f.category, "evidence": f.evidence}
+                for f in critique.findings
+            ],
+        }
+
+    return {
+        "comparison": comparison,
+        "winner_margin": winner_margin,
+        "top_features": top_features,
+        "critique": critique_summary,
+        "lineage": {
+            "model_id": model.meta.artifact_id,
+            "dataset_id": train_dataset_id,
+            "split_plan_id": split_plan_id,
+        },
+        # No "rollback strategy" here on purpose: there is no model registry
+        # yet to roll back through, and fabricating one would be worse than
+        # omitting it.
+    }
 
 
 def _drift_baseline_parquet(store: ArtifactStore, train_dataset_id: str) -> bytes:
@@ -50,8 +178,20 @@ def build_deployment_bundle(
     feature_names: list[str],
     gate: ApprovalGate,
     run_id: str,
+    split_plan_id: str | None = None,
+    outcomes: tuple[ExperimentOutcome, ...] = (),
+    evaluation: EvaluationReport | None = None,
+    explainability: ExplainabilityReport | None = None,
+    critique: CritiqueReport | None = None,
 ) -> DeploymentBundle:
-    """Assemble and store a DeploymentBundle after Gate 3 sign-off."""
+    """Assemble and store a DeploymentBundle after Gate 3 sign-off.
+
+    ``outcomes``/``evaluation``/``explainability``/``critique`` are optional
+    so a bare-minimum caller still gets a bundle; when given, Gate 3 shows
+    the full comparison table, winner margin, top features, and critique
+    verdict instead of just artifact hashes — "why trust deploying this?"
+    answered with evidence, not bare ids.
+    """
     schema_spec = build_inference_schema_spec(
         profile, target_column=problem.target_column, feature_names=feature_names
     )
@@ -60,6 +200,17 @@ def build_deployment_bundle(
     app_blob = store.put_blob(app_source)
     dockerfile_blob = store.put_blob(render_dockerfile().encode("utf-8"))
     drift_blob = store.put_blob(_drift_baseline_parquet(store, train_dataset_id))
+
+    dossier = build_deployment_dossier(
+        model=model,
+        problem=problem,
+        train_dataset_id=train_dataset_id,
+        split_plan_id=split_plan_id,
+        outcomes=outcomes,
+        evaluation=evaluation,
+        explainability=explainability,
+        critique=critique,
+    )
 
     require_approval(
         gate,
@@ -75,6 +226,7 @@ def build_deployment_bundle(
                 "dockerfile_blob": dockerfile_blob,
                 "drift_baseline_blob": drift_blob,
             },
+            "dossier": dossier,
         },
     )
 

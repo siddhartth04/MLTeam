@@ -7,7 +7,7 @@ import { mutate } from "swr";
 import { EmptyState, Panel, SectionTitle } from "@/components/primitives";
 import { resolveGate, useGates } from "@/lib/api";
 import { STAGE_BY_KEY } from "@/lib/stages";
-import type { DecisionRecord, ExcludedTemplate, PendingGate } from "@/lib/types";
+import type { DecisionRecord, DeploymentDossier, ExcludedTemplate, PendingGate } from "@/lib/types";
 
 const GATE_TITLE: Record<string, { title: string; blurb: string }> = {
   gate_spec: {
@@ -112,13 +112,14 @@ function GateCard({ gate }: { gate: PendingGate }) {
 
 // Fields rendered by a dedicated block below, so the generic fallback grid
 // doesn't also dump them as raw JSON.
-const RENDERED_ELSEWHERE = new Set(["reasoning", "excluded_templates"]);
+const RENDERED_ELSEWHERE = new Set(["reasoning", "excluded_templates", "dossier"]);
 
 function GateSummary({ summary }: { summary: Record<string, unknown> }) {
   const reasoning = isDecisionRecord(summary.reasoning) ? summary.reasoning : null;
   const excludedTemplates = Array.isArray(summary.excluded_templates)
     ? (summary.excluded_templates as ExcludedTemplate[])
     : [];
+  const dossier = isDossier(summary.dossier) ? summary.dossier : null;
 
   // Render the most useful shapes nicely; fall back to JSON.
   if (Array.isArray(summary.experiments)) {
@@ -198,12 +199,127 @@ function GateSummary({ summary }: { summary: Record<string, unknown> }) {
           ))}
       </div>
       {reasoning && <ReasoningBlock reasoning={reasoning} className="mt-4" />}
+      {dossier && <DossierBlock dossier={dossier} className="mt-4" />}
     </div>
   );
 }
 
 function isDecisionRecord(value: unknown): value is DecisionRecord {
   return typeof value === "object" && value !== null && "decision" in value;
+}
+
+function isDossier(value: unknown): value is DeploymentDossier {
+  return typeof value === "object" && value !== null && "comparison" in value;
+}
+
+const STATE_TEXT_CLASS: Record<string, string> = {
+  completed: "text-ok",
+  failed: "text-danger",
+  skipped: "text-ink-faint",
+};
+
+function DossierBlock({
+  dossier,
+  className = "",
+}: {
+  dossier: DeploymentDossier;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <div className="label-eyebrow mb-2">Why trust this model</div>
+
+      {dossier.comparison.length > 0 && (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-ink-faint">
+              <th className="pb-2">Experiment</th>
+              <th className="pb-2">Template</th>
+              <th className="pb-2">State</th>
+              <th className="pb-2">{dossier.comparison[0].primary_metric}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {dossier.comparison.map((row) => (
+              <tr
+                key={row.experiment_id}
+                className={`border-t border-base-700/50 ${row.is_winner ? "bg-accent/8" : ""}`}
+              >
+                <td className="py-1.5 font-mono text-ink">
+                  {row.is_winner && (
+                    <span className="mr-2 rounded bg-accent-grad px-1.5 py-0.5 text-[10px] font-bold text-white">
+                      WINNER
+                    </span>
+                  )}
+                  {row.experiment_id}
+                </td>
+                <td className="py-1.5 text-ink-muted">{row.template_id}</td>
+                <td className={`py-1.5 ${STATE_TEXT_CLASS[row.state] ?? "text-ink-muted"}`}>
+                  {row.state}
+                </td>
+                <td className="py-1.5 font-mono text-ink">
+                  {row.mean != null ? `${row.mean.toFixed(4)} ± ${(row.std ?? 0).toFixed(3)}` : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      {dossier.winner_margin && (
+        <div className="mt-3 flex flex-wrap gap-6 text-sm">
+          {dossier.winner_margin.vs_runner_up && (
+            <span className="text-ink-muted">
+              Lead over runner-up ({dossier.winner_margin.vs_runner_up.template_id}):{" "}
+              <span className="font-mono text-ink">
+                +{dossier.winner_margin.vs_runner_up.improvement.toFixed(4)}
+              </span>
+            </span>
+          )}
+          {dossier.winner_margin.vs_dummy != null && (
+            <span className="text-ink-muted">
+              Lead over dummy baseline:{" "}
+              <span className="font-mono text-ink">
+                +{dossier.winner_margin.vs_dummy.toFixed(4)}
+              </span>
+            </span>
+          )}
+        </div>
+      )}
+
+      {dossier.top_features.length > 0 && (
+        <div className="mt-4">
+          <div className="label-eyebrow mb-2">Top features</div>
+          <div className="flex flex-wrap gap-2">
+            {dossier.top_features.map((f) => (
+              <span key={f.feature} className="chip">
+                {f.feature} <span className="text-ink-faint">{f.importance.toFixed(3)}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {dossier.critique && (
+        <div className="mt-4">
+          <div className="label-eyebrow mb-2">
+            Critique verdict:{" "}
+            <span className="text-ink">{dossier.critique.verdict.replace(/_/g, " ")}</span>
+          </div>
+          {dossier.critique.findings.length > 0 && (
+            <ul className="list-inside list-disc space-y-0.5 text-sm text-ink-muted">
+              {dossier.critique.findings.map((f, i) => (
+                <li key={i}>
+                  <span className="uppercase text-ink-faint">{f.severity}</span> [{f.category}]{" "}
+                  {f.evidence}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function ReasoningBlock({

@@ -124,6 +124,7 @@ def seed_demo_run(
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")
 
         from mlteam.agents import read_dataset
+        from mlteam.evaluation.results import list_experiment_outcomes
 
         features = [
             c
@@ -140,6 +141,11 @@ def seed_demo_run(
             feature_names=features,
             gate=AutoApproveGate(),
             run_id=result.initial.run_id,
+            split_plan_id=pipeline.split_plan_id,
+            outcomes=list_experiment_outcomes(store, result.initial.run_id),
+            evaluation=result.final_report,
+            explainability=explain_report,
+            critique=result.final_critique,
         )
         stage(Stage.DEPLOY, StageStatus.DONE)
 

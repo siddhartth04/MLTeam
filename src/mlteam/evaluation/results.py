@@ -12,6 +12,7 @@ from mlteam.contracts import (
     TrainedModel,
     new_artifact,
 )
+from mlteam.store.guard import GuardedArtifactStore
 from mlteam.store.interface import ArtifactStore
 
 
@@ -57,3 +58,15 @@ def store_experiment_outcome(
     )
     store.put(outcome)
     return outcome
+
+
+def list_experiment_outcomes(
+    store: GuardedArtifactStore, run_id: str
+) -> tuple[ExperimentOutcome, ...]:
+    """Every ExperimentOutcome recorded for a run, in no particular order."""
+    outcomes = []
+    for aid in store.list_ids(ExperimentOutcome.artifact_type()):
+        record = store._inner.lineage.get_record(aid)
+        if record is not None and record.run_id == run_id:
+            outcomes.append(store.get(aid))
+    return tuple(outcomes)

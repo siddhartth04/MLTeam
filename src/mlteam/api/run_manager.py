@@ -160,6 +160,7 @@ def _execute(
         # Deployment bundle (Gate 3 via the dashboard).
         stage(Stage.DEPLOY, StageStatus.ACTIVE)
         from mlteam.agents import read_dataset
+        from mlteam.evaluation.results import list_experiment_outcomes
 
         features = [
             c
@@ -176,6 +177,11 @@ def _execute(
                 feature_names=features,
                 gate=gate,
                 run_id=result.initial.run_id,
+                split_plan_id=pipeline.split_plan_id,
+                outcomes=list_experiment_outcomes(store, result.initial.run_id),
+                evaluation=result.final_report,
+                explainability=explain_report,
+                critique=result.final_critique,
             )
             stage(Stage.DEPLOY, StageStatus.DONE)
             note("Deployment bundle signed off", level="success", s=Stage.DEPLOY)

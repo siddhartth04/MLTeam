@@ -8,7 +8,11 @@ from mlteam.agents.cleaner import (
 )
 from mlteam.agents.critic import compute_quantitative_gates, critique_evaluation
 from mlteam.agents.data_io import read_dataset, store_dataframe
-from mlteam.agents.deployer import build_deployment_bundle, materialize_bundle
+from mlteam.agents.deployer import (
+    build_deployment_bundle,
+    build_deployment_dossier,
+    materialize_bundle,
+)
 from mlteam.agents.experiment_planner import (
     estimate_budget,
     plan_experiments,
@@ -31,6 +35,7 @@ __all__ = [
     "HPOOutcome",
     "TrainResult",
     "build_deployment_bundle",
+    "build_deployment_dossier",
     "column_preview",
     "compute_env_hash",
     "compute_quantitative_gates",

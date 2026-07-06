@@ -22,6 +22,13 @@ The remedy catalog (all row-local, all logged):
                             imputer handles the nulls). Genuinely
                             categorical text columns parse ~0% and are
                             left alone.
+- drop_duplicate_rows     — exact-duplicate rows are dropped pre-split.
+                            This is the ONE place duplicates may safely be
+                            removed: doing it post-split (as the cleaner's
+                            equivalent op does, for direct callers that skip
+                            triage) risks an identical row landing in both
+                            train and holdout, inflating holdout metrics with
+                            memorization the split boundary can't detect.
 
 Hard stops (clear ValueError, never a stack trace from deep inside sklearn):
 - target text that mostly fails to parse for a regression task;
@@ -220,7 +227,43 @@ def triage_dataset(
                 hint="over 40% of rows had no label — verify the target column choice",
             )
 
-    # -- 3. Enough labeled data left? ------------------------------------------
+    # -- 3. Exact-duplicate rows -------------------------------------------------
+    # Row-local and safe pre-split BY DEFINITION: dropping a byte-identical
+    # duplicate cannot leak anything a single copy of that row didn't already
+    # carry. It MUST happen here, before the split — the cleaner's dedup op
+    # runs post-split on train only, so if it were the only place duplicates
+    # were removed, an identical row could land in both train and holdout and
+    # the model would "predict" it from having memorized the training copy,
+    # inflating holdout metrics with a form of leakage the split can't catch.
+    n_before_dedup = len(df)
+    df = df.unique(maintain_order=True, keep="first")
+    n_dupes = n_before_dedup - len(df)
+    if n_dupes > 0:
+        fraction = n_dupes / n_before_dedup
+        issues.append(
+            TriageIssue(
+                code=TriageIssueCode.DUPLICATE_ROWS,
+                column="*",
+                detail=f"{n_dupes} exact-duplicate rows ({fraction:.1%})",
+                affected_rows=n_dupes,
+                fraction=round(fraction, 6),
+            )
+        )
+        changed = True
+        remedies.append(
+            TriageRemedy(
+                action=TriageAction.DROP_DUPLICATE_ROWS,
+                column="*",
+                affected_rows=n_dupes,
+                justification=(
+                    "exact-duplicate rows removed pre-split so an identical row "
+                    "can never appear in both train and holdout; dropped "
+                    f"{n_dupes} of {n_before_dedup} rows ({fraction:.1%})"
+                ),
+            )
+        )
+
+    # -- 4. Enough labeled data left? ------------------------------------------
     if len(df) < MIN_LABELED_ROWS:
         issues.append(
             TriageIssue(
@@ -238,7 +281,7 @@ def triage_dataset(
             "more labeled data."
         )
 
-    # -- 4. Feature columns that are mostly numeric but polluted with junk -----
+    # -- 5. Feature columns that are mostly numeric but polluted with junk -----
     for column, dtype in df.schema.items():
         if column == target_column or dtype != pl.String:
             continue

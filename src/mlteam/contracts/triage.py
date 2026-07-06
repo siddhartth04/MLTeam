@@ -26,12 +26,14 @@ class TriageIssueCode(StrEnum):
     TARGET_NOT_NUMERIC = "target_not_numeric"
     NUMERIC_STRING_COLUMN = "numeric_string_column"
     TOO_FEW_LABELED_ROWS = "too_few_labeled_rows"
+    DUPLICATE_ROWS = "duplicate_rows"
 
 
 class TriageAction(StrEnum):
     DROP_UNLABELED_ROWS = "drop_unlabeled_rows"
     COERCE_TARGET_NUMERIC = "coerce_target_numeric"
     COERCE_COLUMN_NUMERIC = "coerce_column_numeric"
+    DROP_DUPLICATE_ROWS = "drop_duplicate_rows"
 
 
 class TriageIssue(BaseModel):

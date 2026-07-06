@@ -43,6 +43,7 @@ def profile_summary(profile: DataProfile) -> dict[str, Any]:
                 if r.mutual_information is None
                 else round(r.mutual_information, 4),
                 "correlation": None if r.correlation is None else round(r.correlation, 4),
+                "spearman": None if r.spearman is None else round(r.spearman, 4),
             }
             for r in relationships
         ],

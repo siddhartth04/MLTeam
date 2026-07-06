@@ -58,13 +58,23 @@ class CorrelationPair(BaseModel):
 
 
 class TargetRelationship(BaseModel):
-    """Per-feature association with the target; feeds leakage suspicion."""
+    """Per-feature association with the target; feeds leakage suspicion.
+
+    ``mutual_information`` is always a bounded [0, 1) NORMALIZED score for
+    BOTH classification (MI / target entropy) and regression (the Gaussian-
+    equivalent correlation transform sqrt(1 - exp(-2*MI)), Joe 1989) — the
+    same 0.9/0.99 thresholds mean the same thing regardless of task type.
+    ``spearman`` catches monotone-but-nonlinear leaks (e.g. a rank or
+    probability transform of the target) that Pearson's linear correlation
+    can miss entirely.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     column: str
     mutual_information: float | None = None
     correlation: float | None = None
+    spearman: float | None = None
 
 
 class DataProfile(Artifact):

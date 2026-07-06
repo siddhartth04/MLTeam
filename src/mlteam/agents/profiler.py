@@ -117,9 +117,22 @@ def _target_entropy(y: np.ndarray) -> float:
     return float(-(probs * np.log(probs)).sum())
 
 
+def _gaussian_equivalent_correlation(mi_nats: float) -> float:
+    """Convert differential-entropy-based MI (nats, unbounded for continuous
+    targets) to the Gaussian-equivalent correlation r = sqrt(1 - exp(-2*MI))
+    (Joe, 1989 -- the MI of a bivariate Gaussian with correlation r is
+    exactly -0.5*ln(1-r^2), so this is that relationship inverted). Bounds
+    the score to [0, 1) so it is comparable to Pearson/Spearman and to the
+    classification branch's entropy-normalized MI: e.g. r=0.9 -> MI=0.83
+    nats, which the OLD unnormalized code would have already flagged at the
+    0.9 threshold despite r=0.9 being a legitimate, non-leaky predictor."""
+    return math.sqrt(max(0.0, 1.0 - math.exp(-2.0 * mi_nats)))
+
+
 def _target_relationships(
     df: pl.DataFrame, target_column: str, seed: int
 ) -> tuple[TargetRelationship, ...]:
+    from scipy.stats import spearmanr
     from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 
     feature_cols = [c for c in df.columns if c != target_column]
@@ -135,20 +148,34 @@ def _target_relationships(
         mi_values = np.clip(raw_mi / entropy, 0.0, 1.0)
     else:
         y = target_series.to_numpy().astype(np.float64)
-        mi_values = mutual_info_regression(features, y, random_state=seed)
+        raw_mi = mutual_info_regression(features, y, random_state=seed)
+        # Regression MI is unbounded (differential entropy) -- normalize to
+        # the SAME [0, 1) scale the classification branch uses, so a single
+        # 0.9/0.99 threshold means "strong association" in both branches
+        # instead of "possible leak" in one and "run-of-the-mill signal" in
+        # the other for the identical raw number.
+        mi_values = np.array([_gaussian_equivalent_correlation(float(m)) for m in raw_mi])
 
     y_numeric = y.astype(np.float64)
     relationships = []
     for idx, col in enumerate(feature_cols):
         feature = features[:, idx]
         corr = None
+        spearman_corr = None
         if np.std(feature) > 0 and np.std(y_numeric) > 0:
             corr = _finite(np.corrcoef(feature, y_numeric)[0, 1])
+            # Spearman catches monotone-but-nonlinear leaks (e.g. exp(y) or a
+            # rank/probability transform of the target) that Pearson misses
+            # entirely -- a perfect monotone relationship has |pearson| < 1
+            # but |spearman| == 1.
+            spearman_result = spearmanr(feature, y_numeric)
+            spearman_corr = _finite(float(spearman_result.statistic))
         relationships.append(
             TargetRelationship(
                 column=col,
                 mutual_information=_finite(mi_values[idx]),
                 correlation=None if corr is None else max(-1.0, min(1.0, corr)),
+                spearman=None if spearman_corr is None else max(-1.0, min(1.0, spearman_corr)),
             )
         )
     return tuple(relationships)
@@ -244,7 +271,13 @@ def _dataset_warnings(
     for rel in relationships:
         mi_leak = rel.mutual_information is not None and rel.mutual_information > _LEAK_MI_THRESHOLD
         corr_leak = rel.correlation is not None and abs(rel.correlation) > _LEAK_CORR_THRESHOLD
-        if mi_leak or corr_leak:
+        # Spearman catches monotone-but-nonlinear leaks (e.g. a rank or
+        # probability transform of the target) that Pearson's linear
+        # correlation misses entirely.
+        spearman_leak = (
+            rel.spearman is not None and abs(rel.spearman) > _LEAK_CORR_THRESHOLD
+        )
+        if mi_leak or corr_leak or spearman_leak:
             warnings.append(
                 ProfileWarning(
                     code=WarningCode.SUSPECTED_LEAK,
@@ -252,8 +285,8 @@ def _dataset_warnings(
                     column=rel.column,
                     message=(
                         f"'{rel.column}' predicts the target almost perfectly "
-                        f"(MI={rel.mutual_information}, corr={rel.correlation}) — "
-                        "possible target leakage"
+                        f"(MI={rel.mutual_information}, corr={rel.correlation}, "
+                        f"spearman={rel.spearman}) — possible target leakage"
                     ),
                 )
             )

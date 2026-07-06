@@ -19,7 +19,14 @@ _LEAK_CORR_THRESHOLD = 0.99
 
 
 def check_near_perfect_features(profile: DataProfile) -> LeakageCheck:
-    """Fail if any feature predicts the target almost perfectly."""
+    """Fail if any feature predicts the target almost perfectly.
+
+    ``mutual_information`` is bounded [0, 1) for BOTH classification (entropy
+    -normalized) and regression (Gaussian-equivalent correlation transform)
+    targets, so a single 0.9 threshold is meaningful across task types.
+    ``spearman`` catches monotone-but-nonlinear leaks (a rank/probability
+    transform of the target) that Pearson's linear correlation can miss.
+    """
     suspects = [
         w.column
         for w in profile.warnings
@@ -28,7 +35,8 @@ def check_near_perfect_features(profile: DataProfile) -> LeakageCheck:
     for rel in profile.target_relationships:
         mi_leak = rel.mutual_information is not None and rel.mutual_information > _LEAK_MI_THRESHOLD
         corr_leak = rel.correlation is not None and abs(rel.correlation) > _LEAK_CORR_THRESHOLD
-        if (mi_leak or corr_leak) and rel.column not in suspects:
+        spearman_leak = rel.spearman is not None and abs(rel.spearman) > _LEAK_CORR_THRESHOLD
+        if (mi_leak or corr_leak or spearman_leak) and rel.column not in suspects:
             suspects.append(rel.column)
     if suspects:
         return LeakageCheck(
@@ -39,7 +47,7 @@ def check_near_perfect_features(profile: DataProfile) -> LeakageCheck:
     return LeakageCheck(
         name="near_perfect_features",
         passed=True,
-        details="no feature exceeds MI/correlation leak thresholds",
+        details="no feature exceeds MI/correlation/Spearman leak thresholds",
     )
 
 

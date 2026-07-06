@@ -29,6 +29,7 @@ export interface StageState {
 
 export interface RunSummary {
   ui_run_id: string;
+  name: string;
   goal_text: string;
   dataset_name: string;
   status: RunStatus;

@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, type ReactNode, useState } from "react";
 import { mutate } from "swr";
 
-import { deleteRun, useGates, useRuns } from "@/lib/api";
+import { deleteRun, renameRun, useGates, useRuns } from "@/lib/api";
 
 import { RunProvider, useActiveRun } from "./RunContext";
 import { StatusPill } from "./primitives";
@@ -47,6 +47,19 @@ function RunSelector() {
     }
   }
 
+  async function handleRename(id: string, currentName: string) {
+    // eslint-disable-next-line no-alert
+    const next = prompt("Run name", currentName);
+    if (next === null || next.trim() === currentName) return;
+    try {
+      await renameRun(id, next.trim());
+      await mutate("/api/runs");
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      alert(err instanceof Error ? err.message : "Failed to rename run");
+    }
+  }
+
   return (
     <div className="px-3">
       <div className="label-eyebrow mb-2 px-1">Active run</div>
@@ -68,8 +81,8 @@ function RunSelector() {
               }`}
             >
               <button onClick={() => setRunId(r.ui_run_id)} className="w-full px-3 py-2 text-left">
-                <div className="flex items-center justify-between gap-2 pr-5">
-                  <span className="mono truncate text-ink">{r.ui_run_id}</span>
+                <div className="flex items-center justify-between gap-2 pr-10">
+                  <span className="truncate text-ink">{r.name}</span>
                   <span
                     className={`h-2 w-2 flex-none rounded-full ${
                       r.status === "running" || r.status === "awaiting_approval"
@@ -82,19 +95,33 @@ function RunSelector() {
                     }`}
                   />
                 </div>
-                <div className="mt-0.5 truncate text-[11px] text-ink-faint">{r.goal_text}</div>
+                <div className="mono mt-0.5 truncate text-[11px] text-ink-faint">{r.ui_run_id}</div>
               </button>
-              {canDelete && !confirming && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setPendingDelete(r.ui_run_id);
-                  }}
-                  title="Delete run"
-                  className="absolute right-1.5 top-1.5 rounded-md p-1 text-ink-faint opacity-0 transition-opacity hover:bg-danger/20 hover:text-danger group-hover:opacity-100"
-                >
-                  ✕
-                </button>
+              {!confirming && (
+                <div className="absolute right-1.5 top-1.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleRename(r.ui_run_id, r.name);
+                    }}
+                    title="Rename run"
+                    className="rounded-md p-1 text-ink-faint hover:bg-accent/20 hover:text-accent-bright"
+                  >
+                    ✎
+                  </button>
+                  {canDelete && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPendingDelete(r.ui_run_id);
+                      }}
+                      title="Delete run"
+                      className="rounded-md p-1 text-ink-faint hover:bg-danger/20 hover:text-danger"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
               )}
               {confirming && (
                 <div className="absolute inset-0 flex items-center justify-end gap-1.5 rounded-xl bg-base-850/95 px-2">
@@ -147,7 +174,8 @@ function TopBar() {
     <div className="sticky top-0 z-20 flex items-center gap-4 border-b border-base-600/60 bg-base-900/70 px-8 py-4 backdrop-blur-xl">
       <div className="flex items-center gap-3">
         <span className="mono text-ink-faint">RUN</span>
-        <span className="mono text-ink">{runId ?? "— none selected —"}</span>
+        <span className="text-ink">{run?.name ?? runId ?? "— none selected —"}</span>
+        {run && <span className="mono text-xs text-ink-faint">{run.ui_run_id}</span>}
       </div>
       {run && (
         <>

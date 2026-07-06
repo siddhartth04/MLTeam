@@ -48,6 +48,7 @@ class RunRecord:
     run_id: str
     goal_text: str
     dataset_name: str
+    name: str = ""
     status: RunStatus = RunStatus.QUEUED
     created_at: datetime = field(default_factory=utcnow)
     stages: list[StageState] = field(default_factory=initial_stage_states)
@@ -69,9 +70,13 @@ class RunRegistry:
 
     # -- lifecycle --------------------------------------------------------------
 
-    def create(self, run_id: str, goal_text: str, dataset_name: str) -> RunRecord:
+    def create(
+        self, run_id: str, goal_text: str, dataset_name: str, name: str = ""
+    ) -> RunRecord:
         with self._lock:
-            record = RunRecord(run_id=run_id, goal_text=goal_text, dataset_name=dataset_name)
+            record = RunRecord(
+                run_id=run_id, goal_text=goal_text, dataset_name=dataset_name, name=name
+            )
             self._runs[run_id] = record
             self._subscribers[run_id] = []
             return record
@@ -79,6 +84,14 @@ class RunRegistry:
     def get(self, run_id: str) -> RunRecord | None:
         with self._lock:
             return self._runs.get(run_id)
+
+    def rename(self, run_id: str, name: str) -> bool:
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return False
+            record.name = name
+            return True
 
     def list_runs(self) -> list[RunRecord]:
         with self._lock:

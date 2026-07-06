@@ -202,6 +202,49 @@ def test_delete_active_run_is_409(client):
     assert reg.get(ui_run_id) is not None  # untouched
 
 
+def test_run_registry_rename(client):
+    _, reg, _ = client
+    reg.create("run-x", goal_text="g", dataset_name="d")
+    assert reg.rename("run-x", "My churn run") is True
+    assert reg.get("run-x").name == "My churn run"
+
+
+def test_run_registry_rename_unknown_run_returns_false(client):
+    _, reg, _ = client
+    assert reg.rename("does-not-exist", "name") is False
+
+
+def test_create_run_with_name_shows_up_in_get(client, tmp_path):
+    api, reg, _ = client
+    reg.create("run-named", goal_text="predict churn", dataset_name="d.csv", name="Churn v2")
+    run = api.get("/api/runs/run-named").json()
+    assert run["name"] == "Churn v2"
+
+
+def test_patch_renames_run(client, tmp_path):
+    api, reg, _ = client
+    reg.create("run-to-rename", goal_text="predict churn", dataset_name="d.csv")
+
+    patch = api.patch("/api/runs/run-to-rename", json={"name": "Renamed"})
+    assert patch.status_code == 200
+    assert patch.json()["name"] == "Renamed"
+    assert api.get("/api/runs/run-to-rename").json()["name"] == "Renamed"
+
+
+def test_patch_unknown_run_is_404(client):
+    api, _, _ = client
+    resp = api.patch("/api/runs/does-not-exist", json={"name": "x"})
+    assert resp.status_code == 404
+
+
+def test_blank_name_falls_back_to_dataset_and_timestamp(client, tmp_path):
+    api, reg, _ = client
+    reg.create("run-blank-name", goal_text="predict churn", dataset_name="d.csv")
+    run = api.get("/api/runs/run-blank-name").json()
+    assert run["name"]  # never empty
+    assert run["dataset_name"] in run["name"]
+
+
 def test_explainability_endpoint(client, tmp_path):
     api, reg, _ = client
     ui_run_id = _launch(client, tmp_path)

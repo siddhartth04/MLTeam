@@ -81,6 +81,7 @@ def seed_demo_run(
         DEMO_UI_RUN_ID,
         goal_text="Identify customers likely to churn so retention can call them first.",
         dataset_name="demo_churn.csv",
+        name="Demo — churn prediction",
     )
     registry.set_status(DEMO_UI_RUN_ID, RunStatus.RUNNING)
 

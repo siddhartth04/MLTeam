@@ -54,13 +54,25 @@ class GateAction(BaseModel):
     notes: str = ""
 
 
+class RenameRequest(BaseModel):
+    name: str
+
+
 def _store(settings: APISettings) -> Any:
     return open_store(settings.store_root)
+
+
+def _display_name(record: RunRecord) -> str:
+    if record.name:
+        return record.name
+    stamp = record.created_at.strftime("%b %d, %H:%M")
+    return f"{record.dataset_name} — {stamp}"
 
 
 def _run_public(record: RunRecord) -> dict[str, Any]:
     return {
         "ui_run_id": record.run_id,
+        "name": _display_name(record),
         "goal_text": record.goal_text,
         "dataset_name": record.dataset_name,
         "status": record.status.value,
@@ -119,6 +131,13 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             raise HTTPException(404, "run not found")
         return {"deleted": True}
 
+    @app.patch("/api/runs/{ui_run_id}")
+    def rename_run(ui_run_id: str, body: RenameRequest) -> dict[str, Any]:
+        if REGISTRY.get(ui_run_id) is None:
+            raise HTTPException(404, "run not found")
+        REGISTRY.rename(ui_run_id, body.name)
+        return _run_public(REGISTRY.get(ui_run_id))
+
     @app.get("/api/runs/{ui_run_id}/events")
     def run_events(ui_run_id: str, limit: int = Query(500, le=2000)) -> list[dict[str, Any]]:
         record = REGISTRY.get(ui_run_id)
@@ -140,6 +159,7 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
     async def create_run(
         goal_text: str = Form(...),
         demo: bool = Form(False),
+        name: str = Form(""),
         file: UploadFile | None = File(None),
     ) -> dict[str, str]:
         ui_run_id = f"run-{uuid.uuid4().hex[:10]}"
@@ -167,6 +187,7 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             transport=transport,
             store_root=settings.store_root,
             model=model,
+            name=name,
         )
         return {"ui_run_id": ui_run_id}
 

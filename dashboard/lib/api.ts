@@ -75,15 +75,26 @@ export async function launchRun(opts: {
   goalText: string;
   file: File | null;
   demo: boolean;
+  name?: string;
 }): Promise<string> {
   const form = new FormData();
   form.append("goal_text", opts.goalText);
   form.append("demo", String(opts.demo));
+  if (opts.name) form.append("name", opts.name);
   if (opts.file) form.append("file", opts.file);
   const res = await fetch("/api/runs", { method: "POST", body: form });
   if (!res.ok) throw new Error(`launch failed: ${res.status}`);
   const data = await res.json();
   return data.ui_run_id as string;
+}
+
+export async function renameRun(uiRunId: string, name: string): Promise<void> {
+  const res = await fetch(`/api/runs/${enc(uiRunId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) throw new Error(`rename failed: ${res.status}`);
 }
 
 export async function resolveGate(

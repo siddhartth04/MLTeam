@@ -135,10 +135,11 @@ def launch_run(
     model: str = "claude-sonnet-4-6",
     seed: int = 42,
     n_folds: int = 3,
+    name: str = "",
     registry: RunRegistry = REGISTRY,
 ) -> threading.Thread:
     """Create the run record and start it on a daemon thread."""
-    registry.create(ui_run_id, goal_text=goal_text, dataset_name=dataset_name)
+    registry.create(ui_run_id, goal_text=goal_text, dataset_name=dataset_name, name=name)
     thread = threading.Thread(
         target=_execute,
         kwargs=dict(

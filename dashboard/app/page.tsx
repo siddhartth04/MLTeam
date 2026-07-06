@@ -20,6 +20,7 @@ export default function LaunchPage() {
   const router = useRouter();
   const { setRunId } = useActiveRun();
   const [goal, setGoal] = useState("");
+  const [runName, setRunName] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [drag, setDrag] = useState(false);
   const [demo, setDemo] = useState(true);
@@ -42,7 +43,7 @@ export default function LaunchPage() {
     setLaunching(true);
     setError(null);
     try {
-      const id = await launchRun({ goalText: goal.trim(), file, demo });
+      const id = await launchRun({ goalText: goal.trim(), file, demo, name: runName.trim() });
       setRunId(id);
       router.push(`/mission?run=${id}`);
     } catch (e) {
@@ -60,6 +61,13 @@ export default function LaunchPage() {
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
           <Panel eyebrow="Step 1" title="Your goal">
+            <input
+              type="text"
+              value={runName}
+              onChange={(e) => setRunName(e.target.value)}
+              placeholder="Run name (optional) — e.g. Churn v2"
+              className="mb-3 w-full rounded-xl border border-base-600/70 bg-base-900/60 p-3 text-sm text-ink outline-none transition-colors placeholder:text-ink-faint focus:border-accent/60"
+            />
             <textarea
               value={goal}
               onChange={(e) => setGoal(e.target.value)}

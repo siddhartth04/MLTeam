@@ -93,7 +93,27 @@ class HPOOutcome:
     best_params: dict[str, Any]
     n_trials_run: int
     n_trials_pruned: int
-    best_cv_score: float
+    # Optuna's own best CV score, from the SAME folds (seed) the search
+    # optimized against -- upward-biased (the max of many noisy trial
+    # estimates is not an unbiased estimate of any one config's true
+    # performance; Cawley & Talbot, 2010). Kept for observability/debugging,
+    # NOT for comparison against other experiments' scores.
+    search_cv_score: float
+    # The winning config's CV score on report_seed's folds (the SAME folds
+    # every other experiment this run was scored on) -- an independent
+    # re-evaluation of the config the search already fixed, restoring both
+    # (a) an honest score not selected-for by the search that produced it,
+    # and (b) fold pairing with incumbent experiments for significance
+    # testing (evaluation/stats.py's paired Nadeau-Bengio test requires the
+    # SAME fold assignment on both sides of a comparison).
+    reported_cv_score: float
+
+    @property
+    def best_cv_score(self) -> float:
+        """Deprecated alias for reported_cv_score -- kept so existing
+        callers reading .best_cv_score get the CORRECTED (re-scored) value,
+        not the search's biased estimate, without needing to change."""
+        return self.reported_cv_score
 
 
 def _objective_factory(
@@ -154,9 +174,22 @@ def tune_experiment(
     space: SearchSpace | None = None,
     experiment_id: str | None = None,
     mlflow_enabled: bool = False,
+    report_seed: int | None = None,
 ) -> HPOOutcome:
-    """Run an Optuna study and store the retrained best config as a model."""
+    """Run an Optuna study and store the retrained best config as a model.
+
+    ``seed`` drives the search (decorrelating repeated tuning rounds across
+    iterations is fine and even desirable there). ``report_seed`` — when
+    different from ``seed`` — is the fold assignment the FINAL model is
+    trained and scored on for reporting/selection: re-scoring on folds the
+    search did not see removes most of the search's selection bias (Cawley
+    & Talbot, 2010) and restores fold pairing with whatever other
+    experiments this run also scored on ``report_seed``'s folds. Defaults
+    to ``seed`` (the old behavior) when omitted.
+    """
     import optuna
+
+    report_seed = seed if report_seed is None else report_seed
 
     space = space if space is not None else SEARCH_SPACES.get(template_id)
     if space is None:
@@ -199,12 +232,14 @@ def tune_experiment(
     pruned = sum(1 for t in study.trials if t.state.name == "PRUNED")
     # study.best_value is the raw maximize-oriented scorer value (e.g. -rmse);
     # report it in the metric's natural sign for humans and downstream code.
+    # This is the search's OWN estimate on the folds it optimized against --
+    # upward-biased, kept only for observability (see search_cv_score below).
     scorer_name = scoring_for(task_type)[primary_metric]
-    best_natural = to_natural_sign(primary_metric, scorer_name, [study.best_value])[0]
+    search_score_natural = to_natural_sign(primary_metric, scorer_name, [study.best_value])[0]
     _log.info(
         "hpo_study_complete",
         template=template_id,
-        best_score=round(best_natural, 6),
+        search_score=round(search_score_natural, 6),
         best_params=study.best_params,
         trials=len(study.trials),
         pruned=pruned,
@@ -217,21 +252,38 @@ def tune_experiment(
         budget=BudgetEstimate(wall_time_seconds=0.0),
         is_baseline=False,
     )
+    # Re-score the winning config on report_seed's folds -- NOT the folds
+    # the search just optimized it against. When report_seed == seed (the
+    # default) this is unchanged from the old behavior; when they differ,
+    # this single extra CV removes most of the search's selection bias and
+    # restores fold pairing with whatever else this run was scored on
+    # report_seed's folds.
     result = train_experiment(
         store,
         dataset_id,
         spec,
         task_type=task_type,
         run_id=run_id,
-        seed=seed,
+        seed=report_seed,
         n_folds=n_folds,
         env_hash=env_hash,
         mlflow_enabled=mlflow_enabled,
     )
+    reported_score = result.metrics[primary_metric].mean
+    if report_seed != seed:
+        _log.info(
+            "hpo_winner_rescored",
+            template=template_id,
+            search_score=round(search_score_natural, 6),
+            reported_score=round(reported_score, 6),
+            search_seed=seed,
+            report_seed=report_seed,
+        )
     return HPOOutcome(
         result=result,
         best_params=dict(study.best_params),
         n_trials_run=len(study.trials),
         n_trials_pruned=pruned,
-        best_cv_score=float(best_natural),
+        search_cv_score=float(search_score_natural),
+        reported_cv_score=float(reported_score),
     )

@@ -176,6 +176,12 @@ def run_iterative_pipeline(
                     primary_metric=primary,
                     run_id=run_id,
                     seed=seed + iteration,
+                    # Re-score the winning config on the BASE seed's folds —
+                    # the same folds every other experiment this run used —
+                    # so the reported score isn't the search's own biased
+                    # estimate and remains fold-paired with incumbents for
+                    # significance testing (see agents/hpo.py, audit Task 5).
+                    report_seed=seed,
                     n_folds=n_folds,
                     env_hash=env_hash,
                     n_trials=hpo_trials,

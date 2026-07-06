@@ -211,6 +211,32 @@ def _apply_op(df: pl.DataFrame, op: CleaningOp) -> tuple[pl.DataFrame, int]:
     raise ValueError(f"cleaning op '{op.op_type}' has no deterministic executor yet")
 
 
+def apply_cleaning_ops_to_frame(df: pl.DataFrame, ops: tuple[CleaningOp, ...]) -> pl.DataFrame:
+    """Replay a stored CleaningManifest's ops on an arbitrary frame.
+
+    Used to re-derive the training-time preprocessing on the frozen holdout
+    at report time — without this, holdout rows keep raw values (e.g. a
+    literal "N/A" string) that training data had normalized to real nulls,
+    so the model's encoder treats them as an unseen category: training-
+    serving skew inside the platform's OWN evaluation.
+
+    Deliberately skips ``drop_duplicate_rows``: that op's purpose is to keep
+    duplicate rows from appearing in multiple CV folds during TRAINING, not
+    to change what the evaluation POPULATION looks like. The holdout is a
+    fixed, already-frozen sample: whatever natural duplicates it contains
+    are part of the true out-of-sample distribution the report should
+    describe, not something to prune post hoc. ``standardize_missing_tokens``
+    and ``drop_column`` are both purely row-local/schema transforms with no
+    such population-level side effect, so they replay safely and are
+    leakage-free by the same argument as ``apply_feature_plan_to_frame``.
+    """
+    for op in ops:
+        if op.op_type is CleaningOpType.DROP_DUPLICATE_ROWS:
+            continue
+        df, _affected_rows = _apply_op(df, op)
+    return df
+
+
 def execute_cleaning(
     store: ArtifactStore,
     dataset_id: str,

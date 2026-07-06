@@ -187,6 +187,7 @@ def seed_demo_run(
                     if pipeline.feature_dataset_id and result.initial.feature_plan_id
                     else None
                 ),
+                cleaning_manifest=store.get(pipeline.cleaning_manifest_id),
                 iterations=tuple(
                     {
                         "index": it.index,

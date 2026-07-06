@@ -108,10 +108,16 @@ _TECHNICAL_TEMPLATE = """<!doctype html>
 
 <h2>Holdout (out-of-sample) metrics</h2>
 {% if holdout_metrics %}
-<table><tr><th>Metric</th><th>Value</th></tr>
-{% for m in holdout_metrics %}<tr><td>{{ m.name }}</td><td>{{ m.value }}</td></tr>{% endfor %}
-</table>
-<p class="muted">Holdout was frozen at ingestion and unlocked only for this report.</p>
+<table><tr><th>Metric</th><th>Value</th><th>95% CI</th><th>Holdout n</th></tr>
+{% for m in holdout_metrics %}
+<tr><td>{{ m.name }}</td><td>{{ m.value }}</td>
+<td class="muted">{% if m.ci_low is defined %}[{{ m.ci_low }},
+ {{ m.ci_high }}]{% else %}—{% endif %}</td>
+<td class="muted">{{ m.n if m.n is defined else '—' }}</td></tr>
+{% endfor %}</table>
+<p class="muted">Holdout was frozen at ingestion and unlocked only for this report. The 95%
+confidence interval is a seeded bootstrap over the holdout rows (1000 resamples) — with a
+small holdout, the point estimate's later decimal places are sampling noise, not precision.</p>
 {% else %}<p class="muted">Holdout metrics unavailable.</p>{% endif %}
 
 <h2>Baseline deltas</h2>

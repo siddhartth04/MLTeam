@@ -11,10 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import structlog
 
 from mlteam.agents.trainer import _temporal_to_epoch
 from mlteam.contracts import (
+    CleaningManifest,
     CritiqueReport,
     DatasetVersion,
     EvaluationReport,
@@ -36,6 +38,11 @@ from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
 
+_BOOTSTRAP_ITERATIONS = 1000
+_BOOTSTRAP_SEED = 20260101  # fixed -- CIs must be reproducible run to run
+_CI_LOW_PCT = 2.5
+_CI_HIGH_PCT = 97.5
+
 
 @dataclass(frozen=True)
 class ReportInputs:
@@ -53,7 +60,83 @@ class ReportInputs:
     # the frozen holdout at scoring time so its engineered columns exist there
     # too — without it, every holdout metric silently drops on "columns missing".
     feature_plan: FeaturePlan | None = None
+    # The cleaning manifest applied to training data. Replayed on the holdout
+    # (minus drop_duplicate_rows) BEFORE the feature plan, so the pipeline
+    # scores the holdout under the SAME preprocessing it was trained under
+    # instead of raw values (e.g. an un-normalized "N/A" string) the encoder
+    # never saw at fit time.
+    cleaning_manifest: CleaningManifest | None = None
     iterations: tuple[dict[str, Any], ...] = field(default_factory=tuple)
+
+
+# sklearn score functions whose signature requires a 1-D `y_score` (the
+# positive-class probability/decision value) rather than the full
+# (n, n_classes) matrix predict_proba returns. Every _SCORING entry using
+# either of these is scoped to strictly-binary task types
+# (BINARY_CLASSIFICATION, ANOMALY_DETECTION) — this is NOT a general "2
+# columns means binary" heuristic, which would silently mis-handle
+# multiclass log_loss (whose score function DOES want the full matrix).
+_NEEDS_POSITIVE_CLASS_COLUMN = frozenset({"roc_auc_score", "average_precision_score"})
+
+
+def _predict_for_scorer(pipeline: Any, scorer: Any, df: Any) -> np.ndarray:
+    """Compute the prediction array a scorer needs, ONCE.
+
+    sklearn scorers request one of predict / predict_proba /
+    decision_function depending on the metric (e.g. roc_auc needs
+    probabilities, rmse needs point predictions). Getting this once and
+    bootstrap-resampling the RESULT (rather than re-invoking the full
+    pipeline's .predict() inside every bootstrap iteration) turns an
+    O(n_iterations) full-pipeline-inference cost into O(1) inference +
+    O(n_iterations) cheap array resampling — the difference between a
+    report taking milliseconds and one taking over a minute.
+    """
+    response_methods = scorer._response_method
+    if isinstance(response_methods, str):
+        response_methods = (response_methods,)
+    for method_name in response_methods:
+        method = getattr(pipeline, method_name, None)
+        if method is None:
+            continue
+        prediction = method(df)
+        if (
+            method_name == "predict_proba"
+            and scorer._score_func.__name__ in _NEEDS_POSITIVE_CLASS_COLUMN
+            and prediction.ndim == 2
+            and prediction.shape[1] == 2
+        ):
+            return prediction[:, 1]  # positive-class column; these two need 1-D y_score
+        return prediction
+    raise ValueError(
+        f"pipeline exposes none of {response_methods} needed by scorer {scorer!r}"
+    )
+
+
+def _bootstrap_ci_from_predictions(
+    scorer: Any,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    *,
+    n_iterations: int = _BOOTSTRAP_ITERATIONS,
+    seed: int = _BOOTSTRAP_SEED,
+) -> tuple[float, float]:
+    """Seeded percentile bootstrap CI, resampling cached predictions.
+
+    Resamples ROWS (with replacement) from the already-computed predictions
+    and recomputes the metric on each resample — this describes sampling
+    uncertainty in the metric given the size of the frozen holdout, which a
+    single point estimate cannot convey (a 48-row holdout's third decimal
+    place is noise, not precision). Deterministic: same seed -> same CI on
+    every report generation for the same holdout + model.
+    """
+    n = len(y_true)
+    rng = np.random.default_rng(seed)
+    scores = np.empty(n_iterations, dtype=np.float64)
+    for i in range(n_iterations):
+        idx = rng.integers(0, n, size=n)
+        scores[i] = scorer._sign * scorer._score_func(y_true[idx], y_pred[idx], **scorer._kwargs)
+    low, high = np.percentile(scores, [_CI_LOW_PCT, _CI_HIGH_PCT])
+    return float(low), float(high)
 
 
 def _holdout_metrics(store: GuardedArtifactStore, inputs: ReportInputs) -> list[dict[str, Any]]:
@@ -67,9 +150,14 @@ def _holdout_metrics(store: GuardedArtifactStore, inputs: ReportInputs) -> list[
 
         frame = pl.read_parquet(unlocked.blob_path(holdout.blob_hash))
 
-    # Re-derive the engineered feature columns on the holdout so the pipeline
-    # sees the same schema it was trained on. Row-local ops only, so this is
-    # leakage-free (see apply_feature_plan_to_frame).
+    # Replay training-time preprocessing in the SAME order training applied
+    # it (clean, then feature-engineer) so the holdout is scored under
+    # identical preprocessing to training, not raw values the pipeline's
+    # fitted encoders/imputers never saw.
+    if inputs.cleaning_manifest is not None:
+        from mlteam.agents.cleaner import apply_cleaning_ops_to_frame
+
+        frame = apply_cleaning_ops_to_frame(frame, inputs.cleaning_manifest.ops)
     if inputs.feature_plan is not None:
         from mlteam.agents.feature_executor import apply_feature_plan_to_frame
 
@@ -77,13 +165,29 @@ def _holdout_metrics(store: GuardedArtifactStore, inputs: ReportInputs) -> list[
     df = _temporal_to_epoch(frame).to_pandas()
 
     target = df.pop(inputs.problem.target_column)
+    n_holdout = len(df)
+    y_true = target.to_numpy()
     scoring = scoring_for(inputs.problem.task_type)
     metrics: list[dict[str, Any]] = []
     for name, scorer_name in scoring.items():
         try:
-            raw = float(get_scorer(scorer_name)(pipeline, df, target))
+            scorer = get_scorer(scorer_name)
+            y_pred = _predict_for_scorer(pipeline, scorer, df)
+            raw = float(scorer._sign * scorer._score_func(y_true, y_pred, **scorer._kwargs))
             value = to_natural_sign(name, scorer_name, [raw])[0]
-            metrics.append({"name": name, "value": round(value, 6)})
+            ci_low_raw, ci_high_raw = _bootstrap_ci_from_predictions(scorer, y_true, y_pred)
+            ci_low, ci_high = sorted(
+                to_natural_sign(name, scorer_name, [ci_low_raw, ci_high_raw])
+            )
+            metrics.append(
+                {
+                    "name": name,
+                    "value": round(value, 6),
+                    "ci_low": round(ci_low, 6),
+                    "ci_high": round(ci_high, 6),
+                    "n": n_holdout,
+                }
+            )
         except Exception as exc:  # some scorers need proba/other shapes
             _log.info("holdout_metric_skipped", metric=name, error=str(exc))
     return metrics

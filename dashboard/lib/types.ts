@@ -136,6 +136,19 @@ export interface ProblemSpec {
   human_confirmed: boolean;
 }
 
+export interface DecisionRecord {
+  decision: string;
+  why: string;
+  evidence: string[];
+  alternatives_considered: string[];
+  assumptions: string[];
+}
+
+export interface ExcludedTemplate {
+  template_id: string;
+  reason: string;
+}
+
 export interface PendingGate {
   ui_run_id: string;
   stage: string;

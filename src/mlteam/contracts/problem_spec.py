@@ -7,6 +7,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from mlteam.contracts.base import Artifact
+from mlteam.contracts.decision import DecisionRecord
 
 
 class TaskType(StrEnum):
@@ -59,3 +60,6 @@ class ProblemSpec(Artifact):
     cost_asymmetry: CostAsymmetry = CostAsymmetry()
     assumptions: tuple[str, ...] = ()
     human_confirmed: bool = False
+    # WHY this target/task_type was chosen over alternatives — optional so
+    # artifacts stored before this field existed still load unchanged.
+    reasoning: DecisionRecord | None = None

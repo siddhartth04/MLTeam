@@ -143,6 +143,7 @@ def run_agentic_pipeline(
             "primary_metric": spec.primary_metric,
             "cost_asymmetry": spec.cost_asymmetry.model_dump(),
             "assumptions": list(spec.assumptions),
+            "reasoning": spec.reasoning.model_dump() if spec.reasoning else None,
         },
     )
     # Confirmation mints a NEW artifact (content changed -> new content hash),
@@ -251,11 +252,13 @@ def run_agentic_pipeline(
         specs = plan.experiments
         plan_rationale = plan.rationale
         plan_id = plan.meta.artifact_id
+        excluded_templates = plan.excluded_templates
     except LLMValidationError as exc:
         _log.warning("experiment_planner_fallback", error=str(exc))
         specs = default_experiment_specs(include_tabpfn=include_tabpfn)
         plan_rationale = "deterministic fallback plan (LLM planner failed validation)"
         plan_id = ""
+        excluded_templates = ()
     total = sum(s.budget.wall_time_seconds for s in specs)
     require_approval(
         gate,
@@ -274,6 +277,9 @@ def run_agentic_pipeline(
             "estimated_total_seconds": total,
             "llm_cost_so_far_usd": client.total_cost_usd,
             "rationale": plan_rationale,
+            "excluded_templates": [
+                {"template_id": e.template_id, "reason": e.reason} for e in excluded_templates
+            ],
             "data_triage": {
                 "rows_before": triage_report.rows_before,
                 "rows_after": triage_report.rows_after,

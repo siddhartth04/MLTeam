@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from mlteam.contracts import CostAsymmetry, ProblemSpec, TaskType, new_artifact
+from mlteam.contracts import CostAsymmetry, DecisionRecord, ProblemSpec, TaskType, new_artifact
 from mlteam.evaluation.metrics import scoring_for
 from mlteam.llm.client import LLMClient
 from mlteam.store.interface import ArtifactStore
@@ -38,6 +38,14 @@ it is the honest metric for rare events).
 negatives if the goal implies one; otherwise leave both at 1.0.
 - Record assumptions you had to make. Be conservative: do not invent constraints \
 the user never stated.
+- why_target: explain WHY this column is the target, not just that it is — e.g. \
+its name/position matches the goal, it looks like the only outcome-shaped column.
+- target_alternatives: list other column names that were plausible target \
+candidates and were considered, even if quickly rejected. Empty only when \
+truly no other column could plausibly be the target.
+- target_evidence: list the concrete signals from the column names/goal text \
+that pointed to this target (e.g. "column name contains 'price'", "goal says \
+'predict churn' and a 'churned' column exists").
 Return only JSON matching the schema."""
 
 
@@ -59,6 +67,11 @@ class ProblemSpecDraft(BaseModel):
     business_constraints: list[str] = Field(default_factory=list)
     cost_asymmetry: CostAsymmetryDraft = CostAsymmetryDraft()
     assumptions: list[str] = Field(default_factory=list)
+    # WHY this target over alternatives — optional-with-defaults so replaying
+    # fixtures recorded before these fields existed still validates.
+    why_target: str = ""
+    target_alternatives: list[str] = Field(default_factory=list)
+    target_evidence: list[str] = Field(default_factory=list)
 
 
 def understand_requirements(
@@ -118,6 +131,13 @@ def understand_requirements(
         ),
         assumptions=tuple(draft.assumptions),
         human_confirmed=False,
+        reasoning=DecisionRecord(
+            decision=f"target_column = '{draft.target_column}' ({draft.task_type.value})",
+            why=draft.why_target,
+            evidence=tuple(draft.target_evidence),
+            alternatives_considered=tuple(draft.target_alternatives),
+            assumptions=tuple(draft.assumptions),
+        ),
     )
     store.put(spec)
     return spec

@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from mlteam.contracts import (
     BudgetEstimate,
     DataProfile,
+    DecisionRecord,
+    ExcludedTemplate,
     ExperimentPlan,
     ExperimentSpec,
     ProblemSpec,
@@ -55,6 +57,12 @@ prediction intervals, not just point forecasts.
 the winner later. Only set config keys when the profile clearly demands it, and \
 only keys valid for that model's constructor.
 - rationale should reference the profile (size, imbalance, cardinality).
+- excluded_templates: list the major template families you did NOT schedule and \
+WHY (e.g. "svm_default: skipped, >20k rows makes its quadratic cost prohibitive"; \
+"mlp_default: skipped, dataset is small and heavily categorical, trees will \
+dominate"). Cover at least: a linear model, svm/knn, mlp, and any ensemble/\
+stacking template not chosen — a reviewer must be able to see the plan's negative \
+space, not just what was picked.
 Return only JSON matching the schema."""
 
 # Rough wall-time heuristics (seconds) per 1k rows, by template.
@@ -122,9 +130,17 @@ class ExperimentDraft(BaseModel):
     is_baseline: bool = False
 
 
+class ExcludedTemplateDraft(BaseModel):
+    template_id: str
+    reason: str
+
+
 class ExperimentPlanDraft(BaseModel):
     experiments: list[ExperimentDraft] = Field(min_length=1)
     rationale: str
+    # Optional-with-defaults so replaying fixtures recorded before this field
+    # existed still validates.
+    excluded_templates: list[ExcludedTemplateDraft] = Field(default_factory=list)
 
 
 def estimate_budget(template_id: str, n_rows: int) -> BudgetEstimate:
@@ -280,6 +296,10 @@ def plan_experiments(
         post_validate=_post_validate,
     )
     draft = result.output
+    excluded = tuple(
+        ExcludedTemplate(template_id=e.template_id, reason=e.reason)
+        for e in draft.excluded_templates
+    )
     plan = new_artifact(
         ExperimentPlan,
         producer_agent="experiment-planner",
@@ -297,6 +317,12 @@ def plan_experiments(
         ),
         rationale=draft.rationale,
         human_approved=False,
+        excluded_templates=excluded,
+        reasoning=DecisionRecord(
+            decision=f"templates: {[e.template_id for e in draft.experiments]}",
+            why=draft.rationale,
+            alternatives_considered=tuple(f"{e.template_id}: {e.reason}" for e in excluded),
+        ),
     )
     store.put(plan)
     return plan

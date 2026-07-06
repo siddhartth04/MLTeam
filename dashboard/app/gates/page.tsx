@@ -7,7 +7,7 @@ import { mutate } from "swr";
 import { EmptyState, Panel, SectionTitle } from "@/components/primitives";
 import { resolveGate, useGates } from "@/lib/api";
 import { STAGE_BY_KEY } from "@/lib/stages";
-import type { PendingGate } from "@/lib/types";
+import type { DecisionRecord, ExcludedTemplate, PendingGate } from "@/lib/types";
 
 const GATE_TITLE: Record<string, { title: string; blurb: string }> = {
   gate_spec: {
@@ -110,7 +110,16 @@ function GateCard({ gate }: { gate: PendingGate }) {
   );
 }
 
+// Fields rendered by a dedicated block below, so the generic fallback grid
+// doesn't also dump them as raw JSON.
+const RENDERED_ELSEWHERE = new Set(["reasoning", "excluded_templates"]);
+
 function GateSummary({ summary }: { summary: Record<string, unknown> }) {
+  const reasoning = isDecisionRecord(summary.reasoning) ? summary.reasoning : null;
+  const excludedTemplates = Array.isArray(summary.excluded_templates)
+    ? (summary.excluded_templates as ExcludedTemplate[])
+    : [];
+
   // Render the most useful shapes nicely; fall back to JSON.
   if (Array.isArray(summary.experiments)) {
     const exps = summary.experiments as Record<string, unknown>[];
@@ -154,22 +163,77 @@ function GateSummary({ summary }: { summary: Record<string, unknown> }) {
             )}
           </div>
         )}
+        {excludedTemplates.length > 0 && (
+          <div className="mt-4">
+            <div className="label-eyebrow mb-2">Deliberately not scheduled</div>
+            <div className="space-y-1.5">
+              {excludedTemplates.map((e) => (
+                <div key={e.template_id} className="flex gap-2 text-sm">
+                  <span className="chip">{e.template_id}</span>
+                  <span className="text-ink-muted">{e.reason}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {reasoning && <ReasoningBlock reasoning={reasoning} className="mt-4" />}
       </div>
     );
   }
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {Object.entries(summary).map(([k, v]) => (
-        <div key={k} className="flex flex-col gap-0.5 rounded-lg bg-base-800/50 p-2.5">
-          <span className="text-[11px] uppercase tracking-wide text-ink-faint">
-            {k.replace(/_/g, " ")}
-          </span>
-          <span className="break-words font-mono text-xs text-ink">
-            {typeof v === "object" ? JSON.stringify(v) : String(v)}
-          </span>
-        </div>
-      ))}
+    <div>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {Object.entries(summary)
+          .filter(([k]) => !RENDERED_ELSEWHERE.has(k))
+          .map(([k, v]) => (
+            <div key={k} className="flex flex-col gap-0.5 rounded-lg bg-base-800/50 p-2.5">
+              <span className="text-[11px] uppercase tracking-wide text-ink-faint">
+                {k.replace(/_/g, " ")}
+              </span>
+              <span className="break-words font-mono text-xs text-ink">
+                {typeof v === "object" ? JSON.stringify(v) : String(v)}
+              </span>
+            </div>
+          ))}
+      </div>
+      {reasoning && <ReasoningBlock reasoning={reasoning} className="mt-4" />}
+    </div>
+  );
+}
+
+function isDecisionRecord(value: unknown): value is DecisionRecord {
+  return typeof value === "object" && value !== null && "decision" in value;
+}
+
+function ReasoningBlock({
+  reasoning,
+  className = "",
+}: {
+  reasoning: DecisionRecord;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-lg border border-accent/20 bg-accent/5 p-3 ${className}`}>
+      <div className="label-eyebrow mb-2 text-accent-bright">Why</div>
+      {reasoning.why && <p className="text-sm text-ink">{reasoning.why}</p>}
+      <ReasoningList label="Evidence" items={reasoning.evidence} />
+      <ReasoningList label="Alternatives considered" items={reasoning.alternatives_considered} />
+      <ReasoningList label="Assumptions" items={reasoning.assumptions} />
+    </div>
+  );
+}
+
+function ReasoningList({ label, items }: { label: string; items: string[] }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="mt-2">
+      <div className="text-[11px] uppercase tracking-wide text-ink-faint">{label}</div>
+      <ul className="mt-1 list-inside list-disc space-y-0.5 text-sm text-ink-muted">
+        {items.map((item, i) => (
+          <li key={i}>{item}</li>
+        ))}
+      </ul>
     </div>
   );
 }

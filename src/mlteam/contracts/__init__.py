@@ -18,6 +18,7 @@ from mlteam.contracts.base import (
 from mlteam.contracts.cleaning import CleaningManifest, CleaningOp, CleaningOpType
 from mlteam.contracts.critique import CritiqueReport, Finding, FindingSeverity, Verdict
 from mlteam.contracts.dataset import DatasetRole, DatasetVersion
+from mlteam.contracts.decision import DecisionRecord
 from mlteam.contracts.deployment import DeploymentBundle
 from mlteam.contracts.evaluation import (
     BaselineDelta,
@@ -28,7 +29,12 @@ from mlteam.contracts.evaluation import (
     MetricSummary,
     SliceMetric,
 )
-from mlteam.contracts.experiments import BudgetEstimate, ExperimentPlan, ExperimentSpec
+from mlteam.contracts.experiments import (
+    BudgetEstimate,
+    ExcludedTemplate,
+    ExperimentPlan,
+    ExperimentSpec,
+)
 from mlteam.contracts.explainability import (
     ExplainabilityReport,
     FeatureImportance,
@@ -101,8 +107,10 @@ __all__ = [
     "DataProfile",
     "DatasetRole",
     "DatasetVersion",
+    "DecisionRecord",
     "DeploymentBundle",
     "EvaluationReport",
+    "ExcludedTemplate",
     "ExperimentOutcome",
     "ExperimentPlan",
     "ExperimentSpec",

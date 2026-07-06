@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mlteam.contracts.base import Artifact
+from mlteam.contracts.decision import DecisionRecord
 
 
 class BudgetEstimate(BaseModel):
@@ -31,10 +32,28 @@ class ExperimentSpec(BaseModel):
     is_baseline: bool = False
 
 
+class ExcludedTemplate(BaseModel):
+    """A template family the planner deliberately did NOT schedule, and why.
+
+    Makes the plan's negative space auditable — a reviewer (human or the
+    critic) can ask "was skipping SVM here actually justified?" instead of
+    just seeing the templates that were chosen.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    template_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
 class ExperimentPlan(Artifact):
     experiments: tuple[ExperimentSpec, ...] = Field(min_length=1)
     rationale: str = Field(min_length=1)
     human_approved: bool = False
+    excluded_templates: tuple[ExcludedTemplate, ...] = ()
+    # WHY this template set was chosen for THIS data profile — optional so
+    # artifacts stored before this field existed still load unchanged.
+    reasoning: DecisionRecord | None = None
 
     @model_validator(mode="after")
     def _baselines_first(self) -> ExperimentPlan:

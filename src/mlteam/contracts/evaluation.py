@@ -66,6 +66,28 @@ class CalibrationSummary(BaseModel):
     method: str | None = None
 
 
+class DecisionThreshold(BaseModel):
+    """The classification cutoff that minimizes expected business cost,
+    computed from out-of-fold probabilities and the human-set cost
+    asymmetry (ProblemSpec.cost_asymmetry) -- rank metrics like ROC-AUC are
+    threshold-free and cannot express "a missed fraud case costs 5x a false
+    alarm"; this is the number that actually acts on that trade-off."""
+
+    model_config = ConfigDict(frozen=True)
+
+    threshold: float = Field(ge=0.0, le=1.0)
+    expected_cost: float
+    cost_at_default_threshold: float = Field(
+        description="Expected cost at the naive 0.5 cutoff, for comparison"
+    )
+    false_positive_cost: float
+    false_negative_cost: float
+    false_positives: int = Field(ge=0)
+    false_negatives: int = Field(ge=0)
+    true_positives: int = Field(ge=0)
+    true_negatives: int = Field(ge=0)
+
+
 class LeakageCheck(BaseModel):
     """One deterministic leakage detector result (e.g. near-perfect-MI feature,
     holdout-untouched assertion, fold-variance sanity)."""
@@ -91,6 +113,7 @@ class EvaluationReport(Artifact):
     baseline_deltas: tuple[BaselineDelta, ...] = ()
     slice_metrics: tuple[SliceMetric, ...] = ()
     calibration: CalibrationSummary = CalibrationSummary()
+    decision_threshold: DecisionThreshold | None = None
     leakage_checks: tuple[LeakageCheck, ...] = ()
     label_issues: LabelIssueSummary | None = None
     holdout_untouched: bool = Field(

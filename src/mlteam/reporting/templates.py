@@ -138,6 +138,32 @@ small holdout, the point estimate's later decimal places are sampling noise, not
 <td class="muted">{{ c.details }}</td></tr>
 {% endfor %}</table>
 
+<h2>Calibration</h2>
+{% if calibration %}
+<table><tr><th>Expected calibration error</th><th>Brier score</th><th>Method</th></tr>
+<tr><td>{{ calibration.expected_calibration_error }}</td>
+<td>{{ calibration.brier_score }}</td>
+<td class="muted">{{ calibration.method }}</td></tr></table>
+{% else %}<p class="muted">Not measured for this run.</p>{% endif %}
+
+<h2>Decision threshold</h2>
+{% if decision_threshold %}
+<p class="muted">Cost-optimal cutoff from out-of-fold probabilities, given a stated cost of
+{{ decision_threshold.false_positive_cost }} per false positive and
+{{ decision_threshold.false_negative_cost }} per false negative.</p>
+<table><tr><th>Threshold</th><th>Expected cost</th><th>Cost at 0.5</th>
+<th>TP</th><th>FP</th><th>FN</th><th>TN</th></tr>
+<tr><td>{{ decision_threshold.threshold }}</td>
+<td>{{ decision_threshold.expected_cost }}</td>
+<td class="muted">{{ decision_threshold.cost_at_default_threshold }}</td>
+<td>{{ decision_threshold.true_positives }}</td>
+<td>{{ decision_threshold.false_positives }}</td>
+<td>{{ decision_threshold.false_negatives }}</td>
+<td>{{ decision_threshold.true_negatives }}</td></tr>
+</table>
+{% else %}<p class="muted">Not computed (no stated cost asymmetry, or not applicable to this
+task type).</p>{% endif %}
+
 <h2>Critic verdict</h2>
 <p><span class="verdict {{ verdict }}">{{ verdict_label }}</span></p>
 {% if findings %}<table><tr><th>Severity</th><th>Category</th><th>Evidence</th></tr>

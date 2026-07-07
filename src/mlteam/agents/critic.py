@@ -77,6 +77,13 @@ slice performance) — do not stay silent on a tie.
 - Every critique must explicitly state, in a finding or the rationale evidence: \
 "evidence sufficient for deployment: yes/no, because ...".
 
+When decision_threshold is present (a binary classification run with a stated \
+cost asymmetry), it is the cost-optimal cutoff computed from out-of-fold \
+probabilities — NOT 0.5. Cite expected_cost vs cost_at_default_threshold; if \
+the gap is large the report should be understood at THAT threshold's confusion \
+counts, not the rank metrics alone. When it is null, do not assume a threshold \
+was chosen — say so if a deployment decision would need one.
+
 For findings, cite the numeric evidence from the report. Severity: critical for \
 leakage/holdout issues, high for failing the dummy gate, medium/low for quality \
 concerns (calibration, fold variance, slice gaps, an unresolved tie, or \
@@ -176,14 +183,19 @@ def compute_quantitative_gates(
             )
         )
     ece = report.calibration.expected_calibration_error
-    gates.append(
-        QuantitativeGate(
-            name="calibration_acceptable",
-            passed=ece is None or ece <= 0.10,
-            detail="not measured" if ece is None else f"ECE={ece:.4f} (threshold 0.10)",
-            hard=False,
+    if ece is not None:
+        # Only add this gate when calibration was actually measured (out-of-
+        # fold ECE, evaluation/calibration.py). A gate that is ALWAYS
+        # unmeasured and therefore ALWAYS passes is audit theater -- worse
+        # than no gate, since its presence implies calibration was checked.
+        gates.append(
+            QuantitativeGate(
+                name="calibration_acceptable",
+                passed=ece <= 0.10,
+                detail=f"ECE={ece:.4f} (threshold 0.10)",
+                hard=False,
+            )
         )
-    )
     return tuple(gates)
 
 

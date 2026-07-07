@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from mlteam.contracts import (
     BaselineDelta,
+    CalibrationSummary,
+    CostAsymmetry,
     DataProfile,
+    DecisionThreshold,
     EvaluationReport,
+    TaskType,
     new_artifact,
 )
+from mlteam.evaluation.calibration import compute_calibration
 from mlteam.evaluation.leakage import (
     check_holdout_untouched,
     check_near_perfect_features,
@@ -24,6 +29,7 @@ from mlteam.evaluation.stats import (
     kfold_train_test_sizes,
     nadeau_bengio_test,
 )
+from mlteam.evaluation.thresholds import cost_optimal_threshold
 from mlteam.store.guard import GuardedArtifactStore
 
 # Fallback heuristic significance threshold, used ONLY when a real paired
@@ -115,6 +121,70 @@ def _baseline_deltas(
     return tuple(deltas)
 
 
+def _calibration_and_threshold(
+    store: GuardedArtifactStore,
+    *,
+    dataset_id: str,
+    model_result: TrainResult,
+    task_type: TaskType,
+    cost_asymmetry: CostAsymmetry | None,
+    n_folds: int,
+    seed: int,
+) -> tuple[CalibrationSummary, DecisionThreshold | None]:
+    """Best-effort: an OOF refit failing (e.g. unsupported task type, or the
+    template lacks predict_proba) must never break report building — the
+    rest of the EvaluationReport is far more load-bearing than these two
+    fields, so log and return empty/None rather than raise."""
+    # Deferred import: evaluation.oof -> agents.trainer/data_io ->
+    # agents.__init__ -> agents.deployer -> orchestration.gates ->
+    # orchestration.__init__ -> orchestration.agentic -> evaluation.report,
+    # a real circular import at module load time if this were top-level.
+    from mlteam.evaluation.oof import compute_oof
+
+    try:
+        oof = compute_oof(
+            store,
+            dataset_id,
+            template_id=model_result.model.template_id,
+            config=model_result.model.config,
+            task_type=task_type,
+            seed=seed,
+            n_folds=n_folds,
+        )
+    except Exception:  # noqa: BLE001 - best-effort, never blocks the report
+        return CalibrationSummary(), None
+    if oof.y_proba is None:
+        return CalibrationSummary(), None
+
+    calib = compute_calibration(oof.y_true, oof.y_proba)
+    calibration = CalibrationSummary(
+        expected_calibration_error=calib.expected_calibration_error,
+        brier_score=calib.brier_score,
+        method=f"out_of_fold_binned_ece_{calib.n_bins}bins",
+    )
+
+    threshold: DecisionThreshold | None = None
+    if cost_asymmetry is not None:
+        result = cost_optimal_threshold(
+            oof.y_true,
+            oof.y_proba,
+            false_positive_cost=cost_asymmetry.false_positive_cost,
+            false_negative_cost=cost_asymmetry.false_negative_cost,
+        )
+        threshold = DecisionThreshold(
+            threshold=result.threshold,
+            expected_cost=result.expected_cost,
+            cost_at_default_threshold=result.cost_at_default,
+            false_positive_cost=result.false_positive_cost,
+            false_negative_cost=result.false_negative_cost,
+            false_positives=result.false_positives,
+            false_negatives=result.false_negatives,
+            true_positives=result.true_positives,
+            true_negatives=result.true_negatives,
+        )
+    return calibration, threshold
+
+
 def build_evaluation_report(
     store: GuardedArtifactStore,
     *,
@@ -124,6 +194,11 @@ def build_evaluation_report(
     profile: DataProfile,
     primary_metric: str,
     n_rows: int | None = None,
+    dataset_id: str | None = None,
+    task_type: TaskType | None = None,
+    cost_asymmetry: CostAsymmetry | None = None,
+    n_folds: int = 5,
+    seed: int = 42,
 ) -> EvaluationReport:
     """Assemble and store the EvaluationReport for the selected model.
 
@@ -133,6 +208,14 @@ def build_evaluation_report(
     two were not scored on the same split), ``significant`` falls back to
     the documented pooled-std heuristic instead — see BaselineDelta's
     ``significance_method`` field for which path was taken.
+
+    ``dataset_id``/``task_type`` (when both given, for a binary
+    classification task with a probabilistic template) drive an out-of-fold
+    refit that measures REAL calibration (Brier/ECE) instead of the
+    permanently-empty CalibrationSummary this used to always ship, and — when
+    ``cost_asymmetry`` is also given — the cost-optimal decision threshold
+    for the business's stated false-positive/false-negative cost ratio. Both
+    are omitted (not a vacuous pass) when the prerequisites aren't met.
     """
     primary = model_result.metrics.get(primary_metric)
     if primary is None:
@@ -144,6 +227,20 @@ def build_evaluation_report(
         check_suspicious_perfection(primary),
         check_holdout_untouched(store),
     )
+
+    calibration = CalibrationSummary()
+    decision_threshold: DecisionThreshold | None = None
+    if dataset_id is not None and task_type is not None:
+        calibration, decision_threshold = _calibration_and_threshold(
+            store,
+            dataset_id=dataset_id,
+            model_result=model_result,
+            task_type=task_type,
+            cost_asymmetry=cost_asymmetry,
+            n_folds=n_folds,
+            seed=seed,
+        )
+
     report = new_artifact(
         EvaluationReport,
         producer_agent="evaluator",
@@ -159,6 +256,8 @@ def build_evaluation_report(
             model_result, dummy_result, "dummy_baseline", n_rows=n_rows
         ),
         slice_metrics=(),
+        calibration=calibration,
+        decision_threshold=decision_threshold,
         leakage_checks=leakage_checks,
         label_issues=None,
         holdout_untouched=store.holdout_untouched(),

@@ -23,6 +23,7 @@ from mlteam.contracts.deployment import DeploymentBundle
 from mlteam.contracts.evaluation import (
     BaselineDelta,
     CalibrationSummary,
+    DecisionThreshold,
     EvaluationReport,
     LabelIssueSummary,
     LeakageCheck,
@@ -111,6 +112,7 @@ __all__ = [
     "DatasetRole",
     "DatasetVersion",
     "DecisionRecord",
+    "DecisionThreshold",
     "DeploymentBundle",
     "EvaluationReport",
     "ExcludedTemplate",

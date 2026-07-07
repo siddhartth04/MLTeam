@@ -92,6 +92,15 @@ def evaluation_summary(report: EvaluationReport) -> dict[str, Any]:
             "expected_calibration_error": report.calibration.expected_calibration_error,
             "brier_score": report.calibration.brier_score,
         },
+        "decision_threshold": None
+        if report.decision_threshold is None
+        else {
+            "threshold": report.decision_threshold.threshold,
+            "expected_cost": report.decision_threshold.expected_cost,
+            "cost_at_default_threshold": report.decision_threshold.cost_at_default_threshold,
+            "false_positive_cost": report.decision_threshold.false_positive_cost,
+            "false_negative_cost": report.decision_threshold.false_negative_cost,
+        },
         "label_issues": None
         if report.label_issues is None
         else {

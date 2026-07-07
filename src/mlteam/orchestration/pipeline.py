@@ -356,6 +356,10 @@ def run_tabular_pipeline(
         profile=train_profile,
         primary_metric=primary_metric,
         n_rows=cleaned.n_rows,
+        dataset_id=cleaned.meta.artifact_id,
+        task_type=task_type,
+        n_folds=n_folds,
+        seed=seed,
     )
     return PipelineResult(
         run_id=run_id,

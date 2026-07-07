@@ -306,6 +306,34 @@ def build_final_report(
             {"name": c.name, "passed": c.passed, "details": c.details}
             for c in inputs.evaluation.leakage_checks
         ],
+        calibration=(
+            {
+                "expected_calibration_error": (
+                    inputs.evaluation.calibration.expected_calibration_error
+                ),
+                "brier_score": inputs.evaluation.calibration.brier_score,
+                "method": inputs.evaluation.calibration.method,
+            }
+            if inputs.evaluation.calibration.expected_calibration_error is not None
+            else None
+        ),
+        decision_threshold=(
+            {
+                "threshold": inputs.evaluation.decision_threshold.threshold,
+                "expected_cost": inputs.evaluation.decision_threshold.expected_cost,
+                "cost_at_default_threshold": (
+                    inputs.evaluation.decision_threshold.cost_at_default_threshold
+                ),
+                "false_positive_cost": inputs.evaluation.decision_threshold.false_positive_cost,
+                "false_negative_cost": inputs.evaluation.decision_threshold.false_negative_cost,
+                "false_positives": inputs.evaluation.decision_threshold.false_positives,
+                "false_negatives": inputs.evaluation.decision_threshold.false_negatives,
+                "true_positives": inputs.evaluation.decision_threshold.true_positives,
+                "true_negatives": inputs.evaluation.decision_threshold.true_negatives,
+            }
+            if inputs.evaluation.decision_threshold is not None
+            else None
+        ),
         verdict=verdict,
         verdict_label=verdict_label,
         findings=[

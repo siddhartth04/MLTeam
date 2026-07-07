@@ -459,6 +459,11 @@ def run_agentic_pipeline(
         profile=train_profile,
         primary_metric=spec.primary_metric,
         n_rows=modeling_dataset.n_rows,
+        dataset_id=modeling_dataset.meta.artifact_id,
+        task_type=spec.task_type,
+        cost_asymmetry=spec.cost_asymmetry,
+        n_folds=n_folds,
+        seed=seed,
     )
     reporter.stage("evaluate", "done")
     reporter.log(f"Evaluation report built for winner {best_key}", stage="evaluate")

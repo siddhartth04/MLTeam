@@ -253,6 +253,11 @@ def run_iterative_pipeline(
             profile=train_profile,
             primary_metric=primary,
             n_rows=n_rows,
+            dataset_id=dataset_id,
+            task_type=spec.task_type,
+            cost_asymmetry=spec.cost_asymmetry,
+            n_folds=n_folds,
+            seed=seed,
         )
         # No terminal-state audit here: the "planned" set is this iteration's
         # dynamically-revised candidates, not a fixed plan to check completeness

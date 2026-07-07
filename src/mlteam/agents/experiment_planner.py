@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +58,11 @@ prediction intervals, not just point forecasts.
 - Prefer an EMPTY config — every template ships vetted defaults, and HPO tunes \
 the winner later. Only set config keys when the profile clearly demands it, and \
 only keys valid for that model's constructor.
+- If the profile flags target_imbalance, set class_weight="balanced" on at least \
+one candidate that supports it (linear_default, svm_default, random_forest_default, \
+extra_trees_default, lightgbm_default only — any other template rejects this key). \
+Do not set it as the ONLY response to imbalance; still schedule the usual \
+candidate slate.
 - rationale should reference the profile (size, imbalance, cardinality).
 - excluded_templates: list the major template families you did NOT schedule and \
 WHY (e.g. "svm_default: skipped, >20k rows makes its quadratic cost prohibitive"; \
@@ -121,6 +126,20 @@ _SECONDS_PER_1K_ROWS: dict[str, float] = {
 }
 _MIN_BUDGET_SECONDS = 2.0
 
+# Templates whose underlying estimator constructor actually accepts
+# class_weight (checked against sklearn/LightGBM's own __init__ signatures).
+# AdaBoost, XGBoost, CatBoost, KNN, GaussianNB, and MLP have no such
+# parameter and would raise a TypeError at fit time if it were passed.
+_CLASS_WEIGHT_CAPABLE_TEMPLATES = frozenset(
+    {
+        "linear_default",
+        "svm_default",
+        "random_forest_default",
+        "extra_trees_default",
+        "lightgbm_default",
+    }
+)
+
 
 class ModelConfigDraft(BaseModel):
     """Whitelisted hyperparameters — the LLM tunes within these knobs only.
@@ -130,6 +149,14 @@ class ModelConfigDraft(BaseModel):
     the template families: boosting (n_estimators/learning_rate/...), CatBoost
     (iterations/depth/l2_leaf_reg), forests (min_samples_leaf/max_features),
     linear/SVM (C/alpha), KNN (n_neighbors). Unused knobs stay None.
+
+    ``class_weight`` is the ONE concrete lever the planner has for the
+    TARGET_IMBALANCE warning the profiler already emits (audit finding M6):
+    without it, the profiler could flag severe imbalance and nothing in the
+    plan could act on that observation. Restricted to "balanced" (the only
+    value every classifier template here actually accepts) rather than an
+    open dict of per-class weights, matching the "typed subset, not an open
+    dict" discipline the rest of this contract already follows.
     """
 
     n_estimators: int | None = None
@@ -149,6 +176,7 @@ class ModelConfigDraft(BaseModel):
     C: float | None = None
     alpha: float | None = None
     n_neighbors: int | None = None
+    class_weight: Literal["balanced"] | None = None
 
     def to_config(self) -> dict[str, Any]:
         return {k: v for k, v in self.model_dump().items() if v is not None}
@@ -313,6 +341,14 @@ def plan_experiments(
             if not get_template(exp.template_id).supports(problem.task_type):
                 raise ValueError(
                     f"template '{exp.template_id}' does not support {problem.task_type.value}"
+                )
+            if (
+                exp.config.class_weight is not None
+                and exp.template_id not in _CLASS_WEIGHT_CAPABLE_TEMPLATES
+            ):
+                raise ValueError(
+                    f"template '{exp.template_id}' does not accept class_weight; "
+                    f"only {sorted(_CLASS_WEIGHT_CAPABLE_TEMPLATES)} do"
                 )
         first_two = [e.template_id for e in draft.experiments[:2]]
         if first_two[:1] != ["dummy_baseline"] or (

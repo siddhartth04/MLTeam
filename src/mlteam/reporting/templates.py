@@ -13,9 +13,15 @@ h1 { border-bottom: 3px solid #16213e; padding-bottom: .3rem; }
 h2 { color: #16213e; margin-top: 2rem; }
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 1rem; margin: 1rem 0; }
-.metric-card { background: #f4f6fb; border-radius: 10px; padding: 1rem; }
+.metric-card { background: #f4f6fb; border-radius: 10px; padding: 1rem; position: relative; }
 .metric-card .value { font-size: 1.6rem; font-weight: 700; color: #0f3460; }
 .metric-card .label { font-size: .85rem; color: #555; }
+.metric-card--holdout { border-left: 4px solid #1e8449; }
+.metric-card--cv { border-left: 4px solid #b9770e; }
+.badge { display: inline-block; font-size: .68rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .03em; padding: .1rem .4rem; border-radius: 4px; margin-bottom: .3rem; }
+.badge--holdout { background: #d5f5e3; color: #1e8449; }
+.badge--cv { background: #fdebd0; color: #b9770e; }
 table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
 th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid #e0e0e0; }
 th { background: #16213e; color: #fff; }
@@ -56,12 +62,18 @@ _BUSINESS_TEMPLATE = """<!doctype html>
 <h2>Headline results</h2>
 <div class="metric-grid">
 {% for m in headline_metrics %}
-  <div class="metric-card"><div class="value">{{ m.value }}</div>
+{% set kind_label = 'out-of-sample' if m.kind == 'holdout' else 'cross-validation' %}
+  <div class="metric-card metric-card--{{ m.kind }}">
+  <div class="badge badge--{{ m.kind }}">{{ kind_label }}</div>
+  <div class="value">{{ m.value }}</div>
   <div class="label">{{ m.label }}</div></div>
 {% endfor %}
 </div>
-<p class="muted">Metrics above are measured on a held-out set the model never
-saw during development, so they reflect real-world performance.</p>
+<p class="muted"><strong>Out-of-sample</strong> cards are measured on a held-out
+set the model never saw during development, so they reflect real-world
+performance. <strong>Cross-validation</strong> cards are in-sample estimates
+from training and tend to run slightly optimistic relative to true holdout
+performance — treat them as a secondary signal, not the headline claim.</p>
 
 <h2>What drives the prediction</h2>
 {% if top_features %}

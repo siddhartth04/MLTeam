@@ -258,7 +258,12 @@ def _dataset_warnings(
         )
     if target_column is not None and _is_class_like(df[target_column]):
         counts = df[target_column].drop_nulls().value_counts()
-        minority = counts["count"].min() / df.height
+        # Denominator is LABELED rows (counts sums to n_labeled after
+        # drop_nulls), not df.height: dividing by the full height
+        # (incl. unlabeled rows awaiting prediction) understates the true
+        # minority fraction and can silently mask real imbalance.
+        n_labeled = counts["count"].sum()
+        minority = counts["count"].min() / n_labeled if n_labeled else 0.0
         if minority < _IMBALANCE_MINORITY_FRACTION:
             warnings.append(
                 ProfileWarning(

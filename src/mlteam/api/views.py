@@ -11,8 +11,10 @@ from typing import Any
 
 from mlteam.contracts import (
     CritiqueReport,
+    DeploymentBundle,
     EvaluationReport,
     ExperimentOutcome,
+    ExperimentPlan,
     ExplainabilityReport,
     FinalReport,
     ProblemSpec,
@@ -100,6 +102,36 @@ def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dic
     return {"nodes": nodes, "edges": edges}
 
 
+def _is_baseline_lookup(store: GuardedArtifactStore, run_id: str) -> dict[str, bool]:
+    """experiment_id -> is_baseline, unioned across every plan revision.
+
+    The plan is the actual source of truth for "is this a baseline" (the LLM
+    marks dummy_baseline AND the incumbent template, e.g. lightgbm_default,
+    is_baseline=true — see experiment_planner.py). template_id ==
+    "dummy_baseline" alone under-counts (misses the marked incumbent) and,
+    separately, screening experiments (screen-dummy, screen-linear, ...) run
+    BEFORE any plan exists and so never appear in one — those correctly fall
+    through to the template_id heuristic below.
+    """
+    scoped = store.artifact_ids_for_run(run_id)
+    lookup: dict[str, bool] = {}
+    for aid in store.list_ids(ExperimentPlan.artifact_type()):
+        if not store.is_in_run(aid, run_id, scoped):
+            continue
+        plan: ExperimentPlan = store.get(aid)
+        for exp in plan.experiments:
+            lookup[exp.experiment_id] = lookup.get(exp.experiment_id, False) or exp.is_baseline
+    return lookup
+
+
+def _resolve_is_baseline(
+    lookup: dict[str, bool], experiment_id: str, template_id: str
+) -> bool:
+    if experiment_id in lookup:
+        return lookup[experiment_id]
+    return template_id == "dummy_baseline"
+
+
 def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str, Any]]:
     """Leaderboard rows: every experiment attempt for a run, whatever its fate.
 
@@ -111,6 +143,7 @@ def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str,
     """
     rows: list[dict[str, Any]] = []
     scoped = store.artifact_ids_for_run(run_id)
+    baseline_lookup = _is_baseline_lookup(store, run_id)
     for aid in store.list_ids(ExperimentOutcome.artifact_type()):
         record = store._inner.lineage.get_record(aid)
         if record is None or not store.is_in_run(aid, run_id, scoped):
@@ -126,7 +159,9 @@ def experiments_view(store: GuardedArtifactStore, run_id: str) -> list[dict[str,
                 "metrics": {m.name: {"mean": m.mean, "std": m.std} for m in outcome.cv_metrics},
                 "wall_time_seconds": outcome.wall_time_seconds,
                 "error": outcome.error,
-                "is_baseline": outcome.template_id == "dummy_baseline",
+                "is_baseline": _resolve_is_baseline(
+                    baseline_lookup, outcome.experiment_id, outcome.template_id
+                ),
             }
         )
     if rows:
@@ -139,6 +174,7 @@ def _legacy_experiments_view(store: GuardedArtifactStore, run_id: str) -> list[d
     """Pre-ExperimentOutcome fallback: winner-only metrics via TrainedModel."""
     rows: list[dict[str, Any]] = []
     scoped = store.artifact_ids_for_run(run_id)
+    baseline_lookup = _is_baseline_lookup(store, run_id)
     for aid in store.list_ids(TrainedModel.artifact_type()):
         record = store._inner.lineage.get_record(aid)
         if record is None or not store.is_in_run(aid, run_id, scoped):
@@ -160,7 +196,9 @@ def _legacy_experiments_view(store: GuardedArtifactStore, run_id: str) -> list[d
                 "metrics": metrics,
                 "wall_time_seconds": None,
                 "error": None,
-                "is_baseline": model.template_id == "dummy_baseline",
+                "is_baseline": _resolve_is_baseline(
+                    baseline_lookup, model.experiment_id, model.template_id
+                ),
             }
         )
     rows.sort(key=lambda r: r["experiment_id"])
@@ -234,6 +272,24 @@ def explainability_view(store: GuardedArtifactStore, run_id: str) -> dict[str, A
             ],
         }
     return None
+
+
+def deployment_bundle_for_run(
+    store: GuardedArtifactStore, run_id: str
+) -> DeploymentBundle | None:
+    """The run's signed-off DeploymentBundle, if Gate 3 has completed.
+
+    audit M8: drift monitoring needed a way to find the bundle a drift
+    check should run against; every other run-scoped lookup in this module
+    already follows this exact membership-table pattern (Task 1's fix).
+    """
+    scoped = store.artifact_ids_for_run(run_id)
+    latest: DeploymentBundle | None = None
+    for aid in store.list_ids(DeploymentBundle.artifact_type()):
+        if not store.is_in_run(aid, run_id, scoped):
+            continue
+        latest = store.get(aid)
+    return latest
 
 
 def final_report_view(store: GuardedArtifactStore, artifact_id: str) -> FinalReport | None:

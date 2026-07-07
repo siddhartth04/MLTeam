@@ -230,6 +230,13 @@ def test_final_report_reads_holdout_and_renders(trained, explainability):
     assert "Plotly.newPlot" in technical
     assert "&#34;" not in _script_bodies(technical)
 
+    # Headline cards visually distinguish true holdout (out-of-sample) from
+    # CV-mean (in-sample) evidence (audit L6) rather than one undifferentiated
+    # grid a reader could mistake for uniformly out-of-sample.
+    assert "metric-card--holdout" in business
+    assert "out-of-sample" in business
+    assert "cross-validation" in business
+
 
 def _script_bodies(html: str) -> str:
     import re

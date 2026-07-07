@@ -88,14 +88,27 @@ def matching_priors(
     *,
     task_type: str,
     n_rows: int,
+    primary_metric: str | None = None,
     max_entries: int = 5,
 ) -> list[LedgerEntry]:
     """Up to ``max_entries`` most recent entries for the same task_type and a
-    similar data scale (bucket +/- 1), most recent first."""
+    similar data scale (bucket +/- 1), most recent first.
+
+    ``margin_vs_second`` is only comparable across entries sharing the same
+    ``primary_metric`` — an rmse margin and a roc_auc margin live on
+    unrelated scales, so mixing them into one "priors" list would let the
+    planner read a meaningless number as if it were signal. When
+    ``primary_metric`` is given, entries recorded under a different metric
+    are excluded; omit it only for call sites that don't render the margin
+    (none currently do — the parameter defaults to None purely so existing
+    callers who haven't been updated keep working during a migration).
+    """
     bucket = _rows_bucket(n_rows)
     matches = [
         e
         for e in read_ledger(store_root)
-        if e["task_type"] == task_type and abs(e["n_rows_bucket"] - bucket) <= 1
+        if e["task_type"] == task_type
+        and abs(e["n_rows_bucket"] - bucket) <= 1
+        and (primary_metric is None or e["primary_metric"] == primary_metric)
     ]
     return list(reversed(matches))[:max_entries]

@@ -7,10 +7,12 @@ actions. All heavy compute happens on the run manager's background threads.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import queue
-import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from mlteam.api.run_manager import launch_run
 from mlteam.api.views import (
     artifact_detail,
     critique_view,
+    deployment_bundle_for_run,
     experiments_view,
     explainability_view,
     final_report_view,
@@ -113,7 +116,14 @@ def _run_public(record: RunRecord) -> dict[str, Any]:
 def create_app(settings: APISettings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(json_output=False)
-    app = FastAPI(title="mlteam Mission Control API", version="1.0")
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        if settings.seed_demo:
+            seed_demo_run(store_root=settings.store_root, data_dir=settings.upload_dir)
+        yield
+
+    app = FastAPI(title="mlteam Mission Control API", version="1.0", lifespan=_lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -121,11 +131,6 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    @app.on_event("startup")
-    def _startup() -> None:
-        if settings.seed_demo:
-            seed_demo_run(store_root=settings.store_root, data_dir=settings.upload_dir)
 
     # -- health ----------------------------------------------------------------
 
@@ -277,6 +282,41 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         rid = _result_run_id(ui_run_id)
         return explainability_view(_store(settings), rid) if rid else None
 
+    # -- drift (audit M8: evidently_drift_report existed with no route) --------
+
+    @app.post("/api/runs/{ui_run_id}/drift")
+    async def run_drift(ui_run_id: str, file: UploadFile = File(...)) -> dict[str, Any]:
+        import pandas as pd
+
+        from mlteam.agents.deployer import evidently_drift_report, summarize_drift_report
+
+        rid = _result_run_id(ui_run_id)
+        if rid is None:
+            raise HTTPException(404, "run not found or not yet completed")
+        bundle = deployment_bundle_for_run(_store(settings), rid)
+        if bundle is None:
+            raise HTTPException(404, "run has no deployment bundle (Gate 3 not yet reached)")
+        if bundle.drift_baseline_blob is None:
+            raise HTTPException(409, "deployment bundle has no drift baseline")
+
+        safe_filename = _sanitize_upload_filename(file.filename)
+        suffix = Path(safe_filename).suffix.lower()
+        contents = await file.read()
+        settings.upload_dir.mkdir(parents=True, exist_ok=True)
+        drift_upload_path = settings.upload_dir / f"{ui_run_id}-drift-{safe_filename}"
+        drift_upload_path.write_bytes(contents)
+        try:
+            current_frame = (
+                pd.read_parquet(drift_upload_path)
+                if suffix == ".parquet"
+                else pd.read_csv(drift_upload_path)
+            )
+        except Exception as exc:
+            raise HTTPException(400, f"could not parse uploaded file: {exc}") from exc
+
+        report = evidently_drift_report(_store(settings), bundle, current_frame)
+        return summarize_drift_report(report)
+
     # -- reports & figures -----------------------------------------------------
 
     @app.get("/api/reports/{report_id}/business", response_class=HTMLResponse)
@@ -354,19 +394,32 @@ def _result_run_id(ui_run_id: str) -> str | None:
     return record.result_run_id if record else None
 
 
-def _sse(ui_run_id: str) -> Any:
+async def _sse(ui_run_id: str) -> AsyncIterator[str]:
+    """Async generator, not a plain sync one (audit M7): Starlette wraps a
+    sync generator's StreamingResponse via iterate_in_threadpool, which
+    reacquires a shared threadpool thread for EVERY iteration -- for a
+    long-lived SSE connection with a 15s blocking get() per iteration, that
+    pins a thread almost continuously per open dashboard tab, and the
+    default pool (~40 threads) starves under a handful of concurrent
+    viewers. The registry's queue.Queue is still the correct cross-thread
+    bridge (the run itself executes on a background thread, not the event
+    loop, and asyncio.Queue is not thread-safe to put() from there), but
+    the blocking get() is hopped onto asyncio.to_thread per call instead of
+    occupying a threadpool thread for the response's entire lifetime --
+    only while a single blocking read is actually in flight.
+    """
     q = REGISTRY.subscribe(ui_run_id)
     try:
         while True:
             try:
-                event = q.get(timeout=15.0)
+                event = await asyncio.to_thread(q.get, timeout=15.0)
             except queue.Empty:
                 yield "event: heartbeat\ndata: {}\n\n"
                 continue
             yield f"event: {event.type}\ndata: {json.dumps(event.data, default=str)}\n\n"
             if event.type == "done":
                 # Give the client a moment, then close.
-                time.sleep(0.1)
+                await asyncio.sleep(0.1)
                 break
     finally:
         REGISTRY.unsubscribe(ui_run_id, q)

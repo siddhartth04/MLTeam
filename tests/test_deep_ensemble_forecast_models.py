@@ -90,9 +90,36 @@ def test_quantile_gbm_median_and_intervals():
         pipeline.named_steps["preprocess"].transform(X)
     )
     assert bands.shape == (len(X), 3)
-    # lower <= median <= upper for the overwhelming majority of rows
-    ordered = (bands[:, 0] <= bands[:, 1] + 1e-6) & (bands[:, 1] <= bands[:, 2] + 1e-6)
-    assert ordered.mean() > 0.9
+    # audit L1: predict_quantiles sorts per-row, so non-crossing is now
+    # guaranteed for every row, not just "most" of them (three independently
+    # trained quantile models have no structural reason to agree on order).
+    ordered = (bands[:, 0] <= bands[:, 1] + 1e-9) & (bands[:, 1] <= bands[:, 2] + 1e-9)
+    assert ordered.all()
+
+
+def test_quantile_gbm_sorts_crossing_quantiles_at_predict():
+    """audit L1: force a crossing (lower quantile model predicts ABOVE the
+    upper quantile model for some rows, which independently trained boosted
+    models can do on real data) and confirm predict_quantiles repairs it by
+    sorting rather than reporting an inverted interval."""
+    from unittest.mock import MagicMock
+
+    import numpy as np
+
+    from mlteam.templates.registry import QuantileGBMRegressor
+
+    reg = QuantileGBMRegressor(quantiles=(0.05, 0.5, 0.95))
+    # Fake fitted sub-models whose raw predictions deliberately cross.
+    reg.models_ = {
+        0.05: MagicMock(predict=lambda X: np.array([10.0, 1.0])),  # crosses row 1
+        0.5: MagicMock(predict=lambda X: np.array([5.0, 5.0])),
+        0.95: MagicMock(predict=lambda X: np.array([8.0, 9.0])),
+    }
+    bands = reg.predict_quantiles(np.zeros((2, 1)))
+    assert (bands[:, 0] <= bands[:, 1]).all()
+    assert (bands[:, 1] <= bands[:, 2]).all()
+    # row 0's raw values (10, 5, 8) sorted ascending -> (5, 8, 10)
+    assert list(bands[0]) == [5.0, 8.0, 10.0]
 
 
 def test_quantile_gbm_survives_cv():

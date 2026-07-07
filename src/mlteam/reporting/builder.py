@@ -196,13 +196,23 @@ def _holdout_metrics(store: GuardedArtifactStore, inputs: ReportInputs) -> list[
 
 
 def _headline(inputs: ReportInputs, holdout_metrics: list[dict[str, Any]]) -> list[dict]:
+    """Headline cards, each tagged with its own evidence kind.
+
+    Holdout numbers are true out-of-sample performance (the frozen set the
+    model never influenced); CV means are in-sample cross-validation
+    estimates from training. Presenting them in one undifferentiated grid
+    (as this used to) makes a business reader treat a CV mean as if it had
+    the same out-of-sample guarantee as the holdout figure — the "kind"
+    field lets the template visually separate the two groups instead of
+    relying on a caption the reader has to notice applies unevenly.
+    """
     primary = inputs.problem.primary_metric
     cards: list[dict] = []
     hp = next((m for m in holdout_metrics if m["name"] == primary), None)
     if hp is not None:
-        cards.append({"value": f"{hp['value']:.3f}", "label": f"{primary} (holdout)"})
+        cards.append({"value": f"{hp['value']:.3f}", "label": primary, "kind": "holdout"})
     for m in inputs.evaluation.cv_metrics:
-        cards.append({"value": f"{m.mean:.3f}", "label": f"{m.name} (CV mean)"})
+        cards.append({"value": f"{m.mean:.3f}", "label": m.name, "kind": "cv"})
     return cards[:4]
 
 

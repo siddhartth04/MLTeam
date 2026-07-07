@@ -5,7 +5,15 @@ import { useState } from "react";
 import { PlotlyFigure } from "@/components/PlotlyFigure";
 import { useActiveRun } from "@/components/RunContext";
 import { EmptyState, Panel, SectionTitle, StatTile, VerdictBadge } from "@/components/primitives";
-import { reportDownloadUrl, reportUrl, useCritique, useExplainability, useRun } from "@/lib/api";
+import {
+  checkDrift,
+  reportDownloadUrl,
+  reportUrl,
+  useCritique,
+  useExplainability,
+  useRun,
+} from "@/lib/api";
+import type { DriftSummary } from "@/lib/types";
 
 export default function ReportPage() {
   const { runId } = useActiveRun();
@@ -73,6 +81,8 @@ export default function ReportPage() {
             </Panel>
           )}
 
+          <DriftCard runId={runId} />
+
           <Panel
             eyebrow="Deliverable"
             title="Generated report"
@@ -119,5 +129,91 @@ export default function ReportPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function DriftCard({ runId }: { runId: string }) {
+  const [summary, setSummary] = useState<DriftSummary | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function handleFile(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      setSummary(await checkDrift(runId, file));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "drift check failed");
+      setSummary(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Panel
+      eyebrow="Monitoring"
+      title="Data drift"
+      action={
+        <label className="btn-ghost cursor-pointer text-xs">
+          {busy ? "Checking…" : "Upload current data (.csv)"}
+          <input
+            type="file"
+            accept=".csv,.parquet"
+            className="hidden"
+            disabled={busy}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFile(file);
+              e.target.value = "";
+            }}
+          />
+        </label>
+      }
+    >
+      {error && <div className="mb-3 text-sm text-danger">{error}</div>}
+      {!summary ? (
+        <EmptyState
+          icon="◈"
+          title="No drift check run yet"
+          hint="Upload a CSV of recent production data to compare it against this model's training baseline (Evidently's data-drift preset)."
+        />
+      ) : (
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-4">
+            <StatTile
+              label="Drifted columns"
+              value={`${summary.n_drifted_columns} / ${summary.n_columns_checked}`}
+              accent={summary.n_drifted_columns > 0 ? "warn" : "ok"}
+            />
+            <StatTile
+              label="Share drifted"
+              value={`${(summary.share_drifted * 100).toFixed(1)}%`}
+              accent={summary.share_drifted > 0 ? "warn" : "ok"}
+            />
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-ink-faint">
+                <th className="pb-2 font-medium">Column</th>
+                <th className="pb-2 font-medium">Drift score</th>
+                <th className="pb-2 font-medium">Drifted</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.columns.map((c) => (
+                <tr key={c.column} className="border-t border-base-700/50">
+                  <td className="py-1.5">{c.column}</td>
+                  <td className="py-1.5">{c.drift_score?.toFixed(4) ?? "—"}</td>
+                  <td className={`py-1.5 ${c.drifted ? "text-warn" : "text-ok"}`}>
+                    {c.drifted ? "yes" : "no"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Panel>
   );
 }

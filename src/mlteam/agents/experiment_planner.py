@@ -362,7 +362,12 @@ def plan_experiments(
             raise ValueError("the first two experiments must have is_baseline=true")
 
     priors = (
-        matching_priors(store_root, task_type=problem.task_type.value, n_rows=n_rows)
+        matching_priors(
+            store_root,
+            task_type=problem.task_type.value,
+            n_rows=n_rows,
+            primary_metric=problem.primary_metric,
+        )
         if store_root is not None
         else []
     )

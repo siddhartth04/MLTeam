@@ -123,6 +123,53 @@ def build_scaled_preprocessor(roles: ColumnRoles) -> Any:
     )
 
 
+def build_catboost_preprocessor(roles: ColumnRoles) -> Any:
+    """Impute only — categoricals stay as raw strings for CatBoost's own
+    ordered-target-statistic encoding, its actual competitive advantage over
+    ordinal/one-hot tree ensembles on categorical-heavy data (audit L2:
+    catboost_default previously reused the generic ordinal preprocessor,
+    discarding that advantage entirely).
+
+    Column order is fixed (numeric block, then categorical block, matching
+    ``roles``), so the categorical block's positions are deterministic —
+    ``_build_catboost`` uses that to build ``cat_features`` indices.
+    """
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import FunctionTransformer
+
+    numeric = Pipeline([("impute", SimpleImputer(strategy="median"))])
+    # A constant sentinel via pandas .fillna(), NOT SimpleImputer: CatBoost's
+    # native categorical path requires cat_features columns to be entirely
+    # non-null strings (raises TypeError on a raw None/NaN reaching
+    # catboost.Pool -- verified directly). SimpleImputer's default
+    # missing_values=np.nan does not match a Python None sitting in an
+    # object-dtype column (as polars null -> pandas object commonly
+    # produces), so mixed None/NaN representations in the same column can
+    # silently pass an unfilled None straight through -- reproduced directly
+    # against sklearn 1.x. pandas .fillna() recognizes both uniformly
+    # regardless of dtype, so it's used here instead. The "__missing__"
+    # token also lets CatBoost treat "was missing" as its own informative
+    # category, standard practice for CatBoost specifically (unlike the
+    # ordinal-encoded templates, where a missing indicator is not exposed).
+    categorical = Pipeline(
+        [
+            (
+                "fill_missing",
+                FunctionTransformer(lambda df: df.fillna("__missing__").astype(str)),
+            )
+        ]
+    )
+    return ColumnTransformer(
+        [
+            ("numeric", numeric, list(roles.numeric)),
+            ("categorical", categorical, list(roles.categorical)),
+        ],
+        remainder="drop",
+    )
+
+
 def _build_dummy(
     task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
 ) -> Any:
@@ -217,6 +264,76 @@ class LabelEncodedClassifier:
         return _Default().__sklearn_tags__()
 
 
+class CatBoostCategoricalWrapper:
+    """Passes ``cat_features`` at fit() time instead of the CatBoost
+    constructor, so ``sklearn.base.clone`` keeps working.
+
+    CatBoost's estimators implement their own get_params/set_params (they do
+    not subclass sklearn's BaseEstimator) and, at least on the sklearn
+    version this repo pins, sklearn's stricter clone() round-trip check
+    raises "constructor either does not set or modifies parameter
+    cat_features" whenever cat_features is passed to the CatBoost
+    constructor at all -- reproduced directly against catboost+sklearn in
+    this environment, independent of *how* cat_features is supplied
+    (constructor kwarg or post-construction set_params both fail identically).
+    Every CV/HPO path in this codebase clones the estimator, so a template
+    that cannot survive clone() is not shippable. Keeping cat_features off
+    the wrapped estimator's constructor entirely and forwarding it at fit()
+    (which CatBoost's .fit() accepts directly) sidesteps the incompatibility
+    without touching CatBoost's own get_params/set_params, since this
+    wrapper's own params are the only ones sklearn's clone() ever inspects.
+    """
+
+    def __init__(self, estimator: Any = None, cat_features: tuple[int, ...] = ()) -> None:
+        self.estimator = estimator
+        self.cat_features = cat_features
+
+    def get_params(self, deep: bool = True) -> dict[str, Any]:
+        params: dict[str, Any] = {"estimator": self.estimator, "cat_features": self.cat_features}
+        if deep and hasattr(self.estimator, "get_params"):
+            for key, value in self.estimator.get_params(deep=True).items():
+                params[f"estimator__{key}"] = value
+        return params
+
+    def set_params(self, **params: Any) -> CatBoostCategoricalWrapper:
+        if "estimator" in params:
+            self.estimator = params.pop("estimator")
+        if "cat_features" in params:
+            self.cat_features = params.pop("cat_features")
+        nested = {k.split("__", 1)[1]: v for k, v in params.items() if k.startswith("estimator__")}
+        if nested:
+            self.estimator.set_params(**nested)
+        return self
+
+    def fit(self, X: Any, y: Any) -> CatBoostCategoricalWrapper:
+        from sklearn.base import clone
+
+        self.estimator_ = clone(self.estimator)
+        self.estimator_.fit(X, y, cat_features=list(self.cat_features))
+        if hasattr(self.estimator_, "classes_"):
+            self.classes_ = self.estimator_.classes_
+        return self
+
+    def predict(self, X: Any) -> Any:
+        import numpy as np
+
+        return np.asarray(self.estimator_.predict(X)).ravel()
+
+    def predict_proba(self, X: Any) -> Any:
+        return self.estimator_.predict_proba(X)
+
+    def __sklearn_tags__(self) -> Any:  # sklearn >= 1.6 protocol
+        from sklearn.base import BaseEstimator, ClassifierMixin, RegressorMixin
+
+        is_classifier = getattr(self.estimator, "_estimator_type", None) == "classifier"
+        mixin = ClassifierMixin if is_classifier else RegressorMixin
+
+        class _Default(mixin, BaseEstimator):
+            pass
+
+        return _Default().__sklearn_tags__()
+
+
 def _build_xgboost(
     task_type: TaskType, roles: ColumnRoles, config: Mapping[str, Any], seed: int
 ) -> Any:
@@ -244,6 +361,13 @@ def _build_catboost(
     from catboost import CatBoostClassifier, CatBoostRegressor
     from sklearn.pipeline import Pipeline
 
+    # cat_features by POSITION: build_catboost_preprocessor's ColumnTransformer
+    # always emits the numeric block first, then the categorical block, in
+    # roles order (audit L2) -- these are the columns CatBoost should treat
+    # as categorical rather than ordinal/one-hot encoding away.
+    cat_feature_indices = tuple(
+        range(len(roles.numeric), len(roles.numeric) + len(roles.categorical))
+    )
     params: dict[str, Any] = {
         "iterations": 300,
         "random_seed": seed,
@@ -253,7 +377,11 @@ def _build_catboost(
         **dict(config),
     }
     model_cls = CatBoostClassifier if task_type in _CLASSIFICATION else CatBoostRegressor
-    return Pipeline([("preprocess", build_preprocessor(roles)), ("model", model_cls(**params))])
+    # cat_features is NOT passed to the constructor -- see
+    # CatBoostCategoricalWrapper's docstring for why that breaks
+    # sklearn.clone(). The wrapper forwards it at fit() time instead.
+    model = CatBoostCategoricalWrapper(model_cls(**params), cat_features=cat_feature_indices)
+    return Pipeline([("preprocess", build_catboost_preprocessor(roles)), ("model", model)])
 
 
 def _build_random_forest(
@@ -729,9 +857,21 @@ class QuantileGBMRegressor:
         return self.models_[0.5].predict(X)
 
     def predict_quantiles(self, X: Any) -> Any:
+        """Columns ordered by ascending quantile; sorted per-row at predict.
+
+        Each quantile is an independently trained LightGBM, so nothing
+        constrains their outputs to be monotone in q — the 5th-percentile
+        model can (and on real data sometimes does) predict above the
+        50th-percentile model for a given row. Reporting a "90% interval"
+        whose lower bound exceeds its upper bound is a worse user-facing bug
+        than the crossing itself, so rows are sorted ascending across the
+        quantile axis, which is a standard practical fix (interval-only,
+        does not change the median predict() returns).
+        """
         import numpy as np
 
-        return np.column_stack([self.models_[q].predict(X) for q in sorted(self.quantiles)])
+        stacked = np.column_stack([self.models_[q].predict(X) for q in sorted(self.quantiles)])
+        return np.sort(stacked, axis=1)
 
     def __sklearn_tags__(self) -> Any:  # sklearn >= 1.6 protocol
         from sklearn.base import BaseEstimator, RegressorMixin

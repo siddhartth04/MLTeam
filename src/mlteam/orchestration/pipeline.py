@@ -252,6 +252,10 @@ def _select_best(results: dict[str, TrainResult], primary_metric: str, dummy_key
     if not candidates:
         raise RuntimeError("no non-dummy experiment trained successfully; cannot produce a report")
     best_id, best = next(iter(candidates.items()))
+    # better_than is strict (>), so an exact tie keeps the first-seen
+    # candidate: deterministic, and stable across reruns, because dict
+    # iteration follows `results`' insertion order, which is spec order
+    # (screening probes first, then the plan's experiments in list order).
     for experiment_id, result in candidates.items():
         if better_than(
             primary_metric,

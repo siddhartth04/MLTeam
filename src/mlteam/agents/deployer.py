@@ -332,3 +332,48 @@ def evidently_drift_report(
     report = Report(metrics=[DataDriftPreset()])
     snapshot = report.run(reference_data=ref, current_data=cur)
     return snapshot.dict()
+
+
+def summarize_drift_report(report: dict) -> dict[str, Any]:
+    """Reduce evidently_drift_report's raw nested metric list to a small,
+    dashboard-friendly summary (audit M8: the raw report is a valid
+    evidence artifact but too large/nested for a single card).
+
+    Extracts DriftedColumnsCount's count/share and each per-column
+    ValueDrift entry's score + drifted-or-not (score below its own
+    configured threshold, read directly off that metric rather than a
+    hardcoded constant, since evidently allows configuring it).
+    """
+    columns: list[dict[str, Any]] = []
+    n_drifted = 0
+    share_drifted = 0.0
+    for metric in report.get("metrics", []):
+        name = metric.get("metric_name", "")
+        config = metric.get("config") or {}
+        if name.startswith("DriftedColumnsCount") or config.get("type", "").endswith(
+            "DriftedColumnsCount"
+        ):
+            value = metric.get("value") or {}
+            n_drifted = int(value.get("count", 0))
+            share_drifted = float(value.get("share", 0.0))
+        elif name.startswith("ValueDrift") or config.get("type", "").endswith("ValueDrift"):
+            column = config.get("column", "unknown")
+            threshold = float(config.get("threshold", 0.05))
+            raw_score = metric.get("value")
+            score = None if raw_score is None else float(raw_score)
+            columns.append(
+                {
+                    "column": column,
+                    "drift_score": score,
+                    # bool(...), not a bare numpy comparison: score can be a
+                    # numpy scalar, whose < returns numpy.bool_ -- not JSON
+                    # serializable by FastAPI's response encoder.
+                    "drifted": bool(score is not None and score < threshold),
+                }
+            )
+    return {
+        "n_columns_checked": len(columns),
+        "n_drifted_columns": n_drifted,
+        "share_drifted": round(share_drifted, 4),
+        "columns": sorted(columns, key=lambda c: (c["drift_score"] is None, c["drift_score"])),
+    }

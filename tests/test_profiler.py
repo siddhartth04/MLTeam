@@ -62,3 +62,32 @@ def test_profile_is_deterministic(guarded_store, churn_csv):
     a = profile_dataset(guarded_store, dataset.meta.artifact_id, run_id="run-a", seed=42)
     b = profile_dataset(guarded_store, dataset.meta.artifact_id, run_id="run-b", seed=42)
     assert a.meta.artifact_id == b.meta.artifact_id
+
+
+def test_imbalance_denominator_excludes_unlabeled_rows():
+    """audit L5: the minority-class fraction must be computed over LABELED
+    rows only. 900 unlabeled + 100 labeled (80/20 split within the labeled
+    rows) is NOT imbalanced by any reasonable standard (20% minority), but
+    dividing by df.height (1000) would report a fake 8% minority and
+    incorrectly trip the warning."""
+    import polars as pl
+
+    from mlteam.agents.profiler import _dataset_warnings
+
+    labeled = [1] * 80 + [0] * 20  # 20% minority among labeled rows -- not imbalanced
+    unlabeled = [None] * 900
+    df = pl.DataFrame({"target": labeled + unlabeled})
+    warnings = _dataset_warnings(df, "target", ())
+    assert not any(w.code is WarningCode.TARGET_IMBALANCE for w in warnings)
+
+
+def test_imbalance_denominator_still_flags_real_imbalance_among_labeled_rows():
+    import polars as pl
+
+    from mlteam.agents.profiler import _dataset_warnings
+
+    labeled = [1] * 95 + [0] * 5  # 5% minority among labeled rows -- genuinely imbalanced
+    unlabeled = [None] * 900
+    df = pl.DataFrame({"target": labeled + unlabeled})
+    warnings = _dataset_warnings(df, "target", ())
+    assert any(w.code is WarningCode.TARGET_IMBALANCE for w in warnings)

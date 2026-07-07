@@ -6,6 +6,7 @@ import useSWR from "swr";
 import type {
   ArtifactDetail,
   Critique,
+  DriftSummary,
   Explainability,
   ExperimentRow,
   LineageGraph,
@@ -116,6 +117,17 @@ export async function deleteRun(uiRunId: string): Promise<void> {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `delete failed: ${res.status}`);
   }
+}
+
+export async function checkDrift(uiRunId: string, file: File): Promise<DriftSummary> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/runs/${enc(uiRunId)}/drift`, { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `drift check failed: ${res.status}`);
+  }
+  return res.json();
 }
 
 export function figureUrl(blobHash: string): string {

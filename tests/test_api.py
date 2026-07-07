@@ -80,6 +80,41 @@ def test_health(client):
     assert api.get("/api/health").json() == {"status": "ok"}
 
 
+def test_sse_stream_yields_snapshot_for_existing_run(client):
+    """audit M7: _sse became an async generator (asyncio.to_thread around
+    the blocking queue.Queue.get) instead of a plain sync one Starlette
+    would run in its shared threadpool for the connection's whole
+    lifetime. This proves the stream still works end-to-end: subscribing
+    immediately yields a snapshot event, and a "done" published event
+    published AFTER the stream opens (register.finish only fans out to
+    subscribers that exist at publish time, matching real usage: a run
+    thread finishes only after a dashboard tab has already subscribed)
+    reaches the client and correctly ends the stream.
+    """
+    import threading
+    import time
+
+    api, reg, _ = client
+    reg.create("run-for-stream", goal_text="predict churn", dataset_name="d.csv")
+
+    def finish_soon() -> None:
+        time.sleep(0.2)
+        reg.finish("run-for-stream", status=RunStatus.COMPLETED)
+
+    threading.Thread(target=finish_soon, daemon=True).start()
+    with api.stream("GET", "/api/runs/run-for-stream/stream") as resp:
+        assert resp.status_code == 200
+        events = [line for line in resp.iter_lines() if line.startswith("event: ")]
+    assert events[0] == "event: snapshot"
+    assert events[-1] == "event: done"
+
+
+def test_sse_stream_404_for_unknown_run(client):
+    api, _, _ = client
+    resp = api.get("/api/runs/does-not-exist/stream")
+    assert resp.status_code == 404
+
+
 def test_full_run_completes_and_populates_api(client, tmp_path):
     api, reg, _ = client
     ui_run_id = _launch(client, tmp_path)
@@ -349,6 +384,68 @@ def test_explainability_endpoint(client, tmp_path):
     fig = api.get(f"/api/figures/{explain['figures'][0]['blob_hash']}")
     assert fig.status_code == 200
     assert '"data"' in fig.text
+
+
+# -- drift monitoring (audit M8: evidently_drift_report had no route) -------
+
+
+def test_drift_endpoint_returns_summary(client, tmp_path):
+    """audit M8: evidently_drift_report existed as a function with no API
+    route, no serving-app hook, no dashboard surface. This proves the route
+    exists, finds the run's deployment bundle, and returns a small
+    JSON-serializable summary rather than the raw nested evidently report."""
+    from synthetic import make_churn_frame
+
+    api, reg, _ = client
+    ui_run_id = _launch(client, tmp_path)
+    _wait_for_completion(reg, ui_run_id)
+
+    current_csv = tmp_path / "current.csv"
+    make_churn_frame(n_rows=100, seed=99).write_csv(current_csv)
+    with open(current_csv, "rb") as fh:
+        resp = api.post(
+            f"/api/runs/{ui_run_id}/drift",
+            files={"file": ("current.csv", fh, "text/csv")},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "n_drifted_columns" in body
+    assert "share_drifted" in body
+    assert isinstance(body["columns"], list)
+    assert body["n_columns_checked"] == len(body["columns"])
+
+
+def test_drift_endpoint_404_for_unknown_run(client, tmp_path):
+    api, _, _ = client
+    csv_path = tmp_path / "current.csv"
+    _make_csv(csv_path)
+    with open(csv_path, "rb") as fh:
+        resp = api.post(
+            "/api/runs/does-not-exist/drift",
+            files={"file": ("current.csv", fh, "text/csv")},
+        )
+    assert resp.status_code == 404
+
+
+def test_drift_endpoint_sanitizes_uploaded_filename(client, tmp_path):
+    api, reg, settings = client
+    ui_run_id = _launch(client, tmp_path)
+    _wait_for_completion(reg, ui_run_id)
+
+    from synthetic import make_churn_frame
+
+    current_csv = tmp_path / "current2.csv"
+    make_churn_frame(n_rows=100, seed=100).write_csv(current_csv)
+    with open(current_csv, "rb") as fh:
+        resp = api.post(
+            f"/api/runs/{ui_run_id}/drift",
+            files={"file": ("../../../../evil.csv", fh, "text/csv")},
+        )
+    assert resp.status_code == 200
+    uploaded = list(settings.upload_dir.glob(f"{ui_run_id}-drift-*"))
+    assert len(uploaded) == 1
+    assert uploaded[0].parent == settings.upload_dir
+    assert uploaded[0].name == f"{ui_run_id}-drift-evil.csv"
 
 
 # -- evidence settings (audit finding M4) ------------------------------------

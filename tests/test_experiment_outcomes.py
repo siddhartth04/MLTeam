@@ -56,6 +56,19 @@ def trained_store(tmp_path: Path):
     return store, result
 
 
+def test_experiments_view_is_baseline_matches_the_plan_not_just_dummy_template(trained_store):
+    """audit L4: default_experiment_specs marks BOTH exp-dummy (dummy_baseline)
+    and exp-lightgbm (lightgbm_default) as is_baseline=True in the plan. The
+    view must agree — deriving is_baseline purely from
+    template_id == "dummy_baseline" would incorrectly report exp-lightgbm as
+    a non-baseline, contradicting the plan it came from."""
+    store, result = trained_store
+    rows = experiments_view(store, result.run_id)
+    by_id = {r["experiment_id"]: r for r in rows}
+    assert by_id["exp-dummy"]["is_baseline"] is True
+    assert by_id["exp-lightgbm"]["is_baseline"] is True
+
+
 def test_completed_outcome_persisted_with_metrics(trained_store):
     store, result = trained_store
     outcome_ids = store.list_ids(ExperimentOutcome.artifact_type())
@@ -168,5 +181,11 @@ def test_experiments_view_returns_state_and_error(trained_store):
     assert all("state" in r for r in rows)
     completed = [r for r in rows if r["state"] == "completed"]
     assert len(completed) >= 2
-    assert any(not r["is_baseline"] for r in completed)
+    # trained_store's fixture plan (default_experiment_specs, no TabPFN) is
+    # exactly the two mandatory baselines (dummy + lightgbm) with no
+    # non-baseline candidate — both are correctly is_baseline=True per the
+    # plan (audit L4: this must come from the plan, not a
+    # template == "dummy_baseline" heuristic that would call lightgbm a
+    # non-baseline and fail this very assertion).
+    assert all(r["is_baseline"] for r in completed)
     assert all(r["error"] is None for r in completed)

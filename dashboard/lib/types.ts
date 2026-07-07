@@ -200,3 +200,16 @@ export interface PendingGate {
   stage: string;
   summary: Record<string, unknown>;
 }
+
+export interface DriftColumn {
+  column: string;
+  drift_score: number | null;
+  drifted: boolean;
+}
+
+export interface DriftSummary {
+  n_columns_checked: number;
+  n_drifted_columns: number;
+  share_drifted: number;
+  columns: DriftColumn[];
+}

@@ -143,6 +143,47 @@ def test_matching_priors_empty_when_no_ledger_exists(tmp_path: Path):
     assert matching_priors(tmp_path, task_type="binary_classification", n_rows=500) == []
 
 
+def test_matching_priors_filters_by_primary_metric(tmp_path: Path):
+    """margin_vs_second is only comparable within the same metric's scale
+    (audit L3) — an roc_auc margin and a pr_auc margin must not be mixed
+    into the same priors list even when task_type and scale both match."""
+    record_outcome(
+        tmp_path,
+        task_type="binary_classification",
+        n_rows=500,
+        n_features=8,
+        categorical_share=0.2,
+        winner_template="catboost_default",
+        margin_vs_second=0.1,
+        primary_metric="roc_auc",
+    )
+    record_outcome(
+        tmp_path,
+        task_type="binary_classification",
+        n_rows=500,
+        n_features=8,
+        categorical_share=0.2,
+        winner_template="xgboost_default",
+        margin_vs_second=0.2,
+        primary_metric="pr_auc",
+    )
+    priors = matching_priors(
+        tmp_path, task_type="binary_classification", n_rows=500, primary_metric="roc_auc"
+    )
+    assert len(priors) == 1
+    assert priors[0]["winner_template"] == "catboost_default"
+
+    priors_pr_auc = matching_priors(
+        tmp_path, task_type="binary_classification", n_rows=500, primary_metric="pr_auc"
+    )
+    assert len(priors_pr_auc) == 1
+    assert priors_pr_auc[0]["winner_template"] == "xgboost_default"
+
+    # Omitting primary_metric keeps the old (pre-L3) behavior of matching both.
+    priors_unfiltered = matching_priors(tmp_path, task_type="binary_classification", n_rows=500)
+    assert len(priors_unfiltered) == 2
+
+
 def test_planner_payload_includes_matching_priors(guarded_store, churn_csv, tmp_path: Path):
     record_outcome(
         tmp_path,

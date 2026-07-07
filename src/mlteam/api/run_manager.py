@@ -134,12 +134,17 @@ def launch_run(
     store_root: Path,
     model: str = "claude-sonnet-4-6",
     seed: int = 42,
-    # 5, not 3 (audit finding M4): k=3 is the weakest defensible CV, and
-    # combined with the paired significance test (Task 2) it makes a
-    # genuinely large improvement come out borderline-non-significant purely
-    # from having too few folds to establish confidence, not from the
-    # improvement being small.
+    # Defaults mirror APISettings' own defaults (audit finding M4): 5, not 3
+    # -- k=3 is the weakest defensible CV, and combined with the paired
+    # significance test (Task 2) it makes a genuinely large improvement come
+    # out borderline-non-significant purely from having too few folds to
+    # establish confidence, not from the improvement being small. Callers
+    # that care should pass the live APISettings values explicitly rather
+    # than rely on these literals staying in sync.
     n_folds: int = 5,
+    hpo_trials: int = 8,
+    max_iterations: int = 2,
+    max_llm_cost_usd: float = 5.0,
     name: str = "",
     registry: RunRegistry = REGISTRY,
 ) -> threading.Thread:
@@ -156,6 +161,9 @@ def launch_run(
             model=model,
             seed=seed,
             n_folds=n_folds,
+            hpo_trials=hpo_trials,
+            max_iterations=max_iterations,
+            max_llm_cost_usd=max_llm_cost_usd,
             registry=registry,
         ),
         daemon=True,
@@ -175,6 +183,9 @@ def _execute(
     model: str,
     seed: int,
     n_folds: int,
+    hpo_trials: int,
+    max_iterations: int,
+    max_llm_cost_usd: float,
     registry: RunRegistry,
 ) -> None:
     # Imported here to keep module import light and avoid heavy deps at import.
@@ -210,10 +221,10 @@ def _execute(
             goal_text=goal_text,
             client=client,
             gate=gate,
-            budget=RunBudget(max_iterations=2),
+            budget=RunBudget(max_iterations=max_iterations, max_llm_cost_usd=max_llm_cost_usd),
             seed=seed,
             n_folds=n_folds,
-            hpo_trials=8,
+            hpo_trials=hpo_trials,
             reporter=reporter,
         )
         registry.set_cost(ui_run_id, client.total_cost_usd)

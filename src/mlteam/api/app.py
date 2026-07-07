@@ -18,7 +18,7 @@ import structlog
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from mlteam.api.config import APISettings, get_settings
 from mlteam.api.demo import seed_demo_run
@@ -55,7 +55,32 @@ class GateAction(BaseModel):
 
 
 class RenameRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=120)
+
+
+_ALLOWED_UPLOAD_SUFFIXES = frozenset({".csv", ".parquet"})
+_MAX_UPLOAD_STEM_LENGTH = 100
+
+
+def _sanitize_upload_filename(raw_filename: str | None) -> str:
+    """Reduce a client-controlled filename to a safe basename before it is
+    used to build a path under upload_dir.
+
+    ``UploadFile.filename`` is attacker-controlled multipart form data: a
+    name containing path separators (``../../evil.csv``, or an absolute
+    path) would otherwise escape upload_dir when joined naively. ``.name``
+    strips any directory components (POSIX and Windows separators alike);
+    the suffix allowlist and length cap close off writing arbitrary
+    extensions or excessively long names to disk.
+    """
+    name = Path(raw_filename or "uploaded.csv").name
+    suffix = Path(name).suffix.lower()
+    if suffix not in _ALLOWED_UPLOAD_SUFFIXES:
+        raise HTTPException(
+            400, f"unsupported file type '{suffix}' — allowed: {sorted(_ALLOWED_UPLOAD_SUFFIXES)}"
+        )
+    stem = Path(name).stem[:_MAX_UPLOAD_STEM_LENGTH] or "uploaded"
+    return f"{stem}{suffix}"
 
 
 def _store(settings: APISettings) -> Any:
@@ -165,9 +190,10 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         ui_run_id = f"run-{uuid.uuid4().hex[:10]}"
         settings.upload_dir.mkdir(parents=True, exist_ok=True)
         if file is not None:
-            data_path = settings.upload_dir / f"{ui_run_id}-{file.filename}"
+            safe_filename = _sanitize_upload_filename(file.filename)
+            data_path = settings.upload_dir / f"{ui_run_id}-{safe_filename}"
             data_path.write_bytes(await file.read())
-            dataset_name = file.filename or "uploaded.csv"
+            dataset_name = safe_filename
         else:
             from mlteam.api.demo import _demo_dataset
 
@@ -187,6 +213,10 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             transport=transport,
             store_root=settings.store_root,
             model=model,
+            n_folds=settings.n_folds,
+            hpo_trials=settings.hpo_trials,
+            max_iterations=settings.max_iterations,
+            max_llm_cost_usd=settings.max_llm_cost_usd,
             name=name,
         )
         return {"ui_run_id": ui_run_id}

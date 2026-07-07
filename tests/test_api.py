@@ -269,6 +269,66 @@ def test_patch_unknown_run_is_404(client):
     assert resp.status_code == 404
 
 
+def test_patch_rejects_overlong_name(client):
+    api, reg, _ = client
+    reg.create("run-long-name", goal_text="predict churn", dataset_name="d.csv")
+    resp = api.patch("/api/runs/run-long-name", json={"name": "x" * 121})
+    assert resp.status_code == 422
+
+
+def test_upload_with_path_traversal_filename_stays_inside_upload_dir(client, tmp_path):
+    api, _, settings = client
+    csv_path = tmp_path / "upload_src.csv"
+    _make_csv(csv_path)
+    with open(csv_path, "rb") as fh:
+        resp = api.post(
+            "/api/runs",
+            data={"goal_text": "predict churn", "demo": "true"},
+            files={"file": ("../../../../evil.csv", fh, "text/csv")},
+        )
+    assert resp.status_code == 200
+    ui_run_id = resp.json()["ui_run_id"]
+
+    uploaded = list(settings.upload_dir.glob(f"{ui_run_id}-*"))
+    assert len(uploaded) == 1
+    # the sanitized name has no path separators and lands directly under upload_dir
+    assert uploaded[0].parent == settings.upload_dir
+    assert uploaded[0].name == f"{ui_run_id}-evil.csv"
+    # nothing was written above upload_dir
+    assert not (settings.upload_dir.parent / "evil.csv").exists()
+
+
+def test_upload_rejects_disallowed_suffix(client, tmp_path):
+    api, _, _ = client
+    exe_path = tmp_path / "payload.exe"
+    exe_path.write_bytes(b"not really an executable")
+    with open(exe_path, "rb") as fh:
+        resp = api.post(
+            "/api/runs",
+            data={"goal_text": "predict churn", "demo": "true"},
+            files={"file": ("payload.exe", fh, "application/octet-stream")},
+        )
+    assert resp.status_code == 400
+
+
+def test_upload_caps_overlong_filename_stem(client, tmp_path):
+    api, _, settings = client
+    csv_path = tmp_path / "upload_src2.csv"
+    _make_csv(csv_path)
+    long_name = ("a" * 300) + ".csv"
+    with open(csv_path, "rb") as fh:
+        resp = api.post(
+            "/api/runs",
+            data={"goal_text": "predict churn", "demo": "true"},
+            files={"file": (long_name, fh, "text/csv")},
+        )
+    assert resp.status_code == 200
+    ui_run_id = resp.json()["ui_run_id"]
+    uploaded = list(settings.upload_dir.glob(f"{ui_run_id}-*"))
+    assert len(uploaded) == 1
+    assert len(uploaded[0].name) < 130
+
+
 def test_blank_name_falls_back_to_dataset_and_timestamp(client, tmp_path):
     api, reg, _ = client
     reg.create("run-blank-name", goal_text="predict churn", dataset_name="d.csv")
@@ -289,3 +349,66 @@ def test_explainability_endpoint(client, tmp_path):
     fig = api.get(f"/api/figures/{explain['figures'][0]['blob_hash']}")
     assert fig.status_code == 200
     assert '"data"' in fig.text
+
+
+# -- evidence settings (audit finding M4) ------------------------------------
+
+
+def test_api_settings_evidence_defaults_are_not_weak():
+    """k=3 folds is the weakest defensible CV (audit M4); the shipped default
+    must be the already-verified-safe value, not whatever is cheapest."""
+    settings = APISettings(_env_file=None)
+    assert settings.n_folds == 5
+    assert settings.hpo_trials == 8
+    assert settings.max_iterations == 2
+    assert settings.max_llm_cost_usd == 5.0
+
+
+def test_api_settings_respects_env_override(monkeypatch):
+    monkeypatch.setenv("MLTEAM_API_N_FOLDS", "10")
+    monkeypatch.setenv("MLTEAM_API_HPO_TRIALS", "20")
+    monkeypatch.setenv("MLTEAM_API_MAX_ITERATIONS", "5")
+    monkeypatch.setenv("MLTEAM_API_MAX_LLM_COST_USD", "1.5")
+    settings = APISettings(_env_file=None)
+    assert settings.n_folds == 10
+    assert settings.hpo_trials == 20
+    assert settings.max_iterations == 5
+    assert settings.max_llm_cost_usd == 1.5
+
+
+def test_launch_run_forwards_settings_to_the_pipeline_call(client, tmp_path, monkeypatch):
+    """create_run must pass the configured evidence settings through to the
+    actual pipeline invocation, not silently keep launch_run's own literals."""
+    api, reg, settings = client
+    monkeypatch.setattr(settings, "n_folds", 7)
+    monkeypatch.setattr(settings, "hpo_trials", 3)
+    monkeypatch.setattr(settings, "max_iterations", 1)
+    monkeypatch.setattr(settings, "max_llm_cost_usd", 0.5)
+
+    captured: dict[str, object] = {}
+    import mlteam.api.run_manager as rm_module
+
+    real_launch_run = rm_module.launch_run
+
+    def spy_launch_run(**kwargs):
+        captured.update(kwargs)
+        return real_launch_run(**kwargs)
+
+    monkeypatch.setattr(rm_module, "launch_run", spy_launch_run)
+    import mlteam.api.app as app_module
+
+    monkeypatch.setattr(app_module, "launch_run", spy_launch_run)
+
+    csv_path = tmp_path / "settings_upload.csv"
+    _make_csv(csv_path)
+    with open(csv_path, "rb") as fh:
+        resp = api.post(
+            "/api/runs",
+            data={"goal_text": "predict churn", "demo": "true"},
+            files={"file": ("settings.csv", fh, "text/csv")},
+        )
+    assert resp.status_code == 200
+    assert captured["n_folds"] == 7
+    assert captured["hpo_trials"] == 3
+    assert captured["max_iterations"] == 1
+    assert captured["max_llm_cost_usd"] == 0.5

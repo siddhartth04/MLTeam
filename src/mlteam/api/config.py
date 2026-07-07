@@ -26,6 +26,17 @@ class APISettings(BaseSettings):
     llm_api_key: str | None = None
     llm_api_base: str | None = None
 
+    # Evidence strength (audit finding M4): these were hardcoded at the call
+    # site with no way to raise them without editing source. 5, not 3: k=3
+    # is the weakest defensible CV, and combined with the paired
+    # significance test it makes a genuinely large improvement come out
+    # borderline-non-significant purely from having too few folds, not from
+    # the improvement being small.
+    n_folds: int = 5
+    hpo_trials: int = 8
+    max_iterations: int = 2
+    max_llm_cost_usd: float = 5.0
+
 
 @lru_cache
 def get_settings() -> APISettings:

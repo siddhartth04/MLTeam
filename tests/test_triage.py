@@ -67,6 +67,48 @@ def test_triage_coerces_numeric_target_stored_as_text(local_store):
     assert report.remedies[0].action == TriageAction.COERCE_TARGET_NUMERIC
 
 
+def test_triage_tolerates_placeholder_labels_in_numeric_target(local_store):
+    """The live 187k-row housing failure: a clean numeric target where ~10%
+    of listings say 'Call for Price'. That is an unlabeled row wearing a
+    text costume, not evidence the column is non-numeric — triage must
+    coerce, drop those rows via the existing unlabeled-row machinery, and
+    NAME the placeholder in the remedy so Gate 2 shows what was lost.
+    (The old 0.95 cliff hard-failed this dataset at a 94.8% parse rate.)"""
+    n_priced, n_placeholder = 90, 10
+    prices = [
+        f"{40 + i}.5 Lac " if i % 2 == 0 else str(4_000_000 + i * 1000)
+        for i in range(n_priced)
+    ]
+    prices += ["Call for Price"] * n_placeholder
+    df = pl.DataFrame({"row_id": list(range(n_priced + n_placeholder)), "price": prices})
+    ds_id = _store_df(local_store, df, "price")
+    triaged, report = triage_dataset(
+        local_store, ds_id, target_column="price", task_type=TaskType.REGRESSION, run_id=RUN
+    )
+    assert report.rows_before == n_priced + n_placeholder
+    assert report.rows_after == n_priced
+    actions = [r.action for r in report.remedies]
+    assert actions == [TriageAction.COERCE_TARGET_NUMERIC, TriageAction.DROP_UNLABELED_ROWS]
+    coerce = report.remedies[0]
+    assert coerce.affected_rows == n_placeholder
+    assert "Call for Price" in coerce.justification  # the offender is named, not a bare %
+
+
+def test_triage_rejects_text_target_and_names_the_offending_values(local_store):
+    """A column that is mostly prose (<80% numeric) is still a hard stop —
+    and the error must name sample unparseable values, so the user gets a
+    diagnosis instead of a bare percentage they cannot act on."""
+    n = 100
+    values = [str(1000 + i) for i in range(30)] + ["Luxury Apartment"] * 70
+    df = pl.DataFrame({"row_id": list(range(n)), "target": values})
+    ds_id = _store_df(local_store, df, "target")
+    with pytest.raises(ValueError, match="does not look like a usable") as excinfo:
+        triage_dataset(
+            local_store, ds_id, target_column="target", task_type=TaskType.REGRESSION, run_id=RUN
+        )
+    assert "Luxury Apartment" in str(excinfo.value)
+
+
 def test_triage_coerces_junk_numeric_features(local_store):
     """A feature column that's >80% numeric gets junk values nulled."""
     n = 60

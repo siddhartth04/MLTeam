@@ -61,7 +61,20 @@ from mlteam.store.interface import ArtifactStore
 _log = structlog.get_logger(__name__)
 
 MIN_LABELED_ROWS = 50
-TARGET_PARSE_RATE_MIN = 0.95
+# The parse-rate thresholds answer ONE question: "is this column
+# fundamentally numeric?" — NOT "how much data may we lose?". Those are
+# different questions with different owners. Data loss from junk labels is
+# governed downstream by its own guardrails (drop_unlabeled_rows reporting,
+# WARN_DROP_FRACTION, MIN_LABELED_ROWS), all visible at Gate 2. The target
+# threshold was originally 0.95, which conflated the two questions and
+# hard-failed a whole class of perfectly usable real-world datasets:
+# scraped/marketplace data routinely carries 5-20% placeholder labels
+# ("Call for Price", "POA", "Price on Request") on an otherwise clean
+# numeric column — observed live on a 187k-row housing dataset that parsed
+# at 94.8% and halted. 0.80 matches the feature-column judgment of "mostly
+# numeric": same question, same threshold; only the junk's fate differs
+# (features: null -> in-pipeline imputer; target: null -> dropped rows).
+TARGET_PARSE_RATE_MIN = 0.80
 FEATURE_PARSE_RATE_MIN = 0.80
 WARN_DROP_FRACTION = 0.40
 
@@ -128,6 +141,25 @@ def _parse_rate(df: pl.DataFrame, column: str, present: pl.Series) -> tuple[floa
     return n_parsed / n_present, n_present - n_parsed
 
 
+def _describe_unparseable(
+    df: pl.DataFrame, column: str, present: pl.Series, k: int = 3
+) -> str:
+    """Name the top-k distinct unparseable values, with counts.
+
+    "94.8% of values parse" tells a user THAT something is wrong but not
+    WHAT — they end up re-uploading blind (observed: six upload attempts of
+    the same file). Naming the actual offenders ("'Call for Price' x9684")
+    turns the message into a diagnosis they can act on immediately.
+    """
+    parsed = df.select(_numeric_parse_expr(column).alias("p"))["p"]
+    junk = df.filter(present & parsed.is_null())[column]
+    if junk.is_empty():
+        return ""
+    top = junk.value_counts().sort("count", descending=True).head(k)
+    samples = ", ".join(f"'{str(v)[:40]}' x{c}" for v, c in top.iter_rows())
+    return f"unparseable values include: {samples}"
+
+
 def triage_dataset(
     store: ArtifactStore,
     dataset_id: str,
@@ -153,11 +185,15 @@ def triage_dataset(
     if regression_like and df.schema[target_column] == pl.String:
         present = _present_mask(df, target_column)
         rate, n_junk = _parse_rate(df, target_column, present)
+        junk_samples = _describe_unparseable(df, target_column, present)
         issues.append(
             TriageIssue(
                 code=TriageIssueCode.TARGET_NOT_NUMERIC,
                 column=target_column,
-                detail=f"{task_type.value} target is text; {rate:.1%} of present values parse",
+                detail=(
+                    f"{task_type.value} target is text; {rate:.1%} of present values parse"
+                    + (f"; {junk_samples}" if junk_samples else "")
+                ),
                 affected_rows=int(present.sum()),
                 fraction=round(1.0 - rate, 6),
             )
@@ -166,8 +202,8 @@ def triage_dataset(
             raise ValueError(
                 f"target column '{target_column}' is text and only {rate:.1%} of its "
                 f"values parse as numbers — it does not look like a usable "
-                f"{task_type.value} target. Check whether another column holds the "
-                "numeric value, or clean this column before uploading."
+                f"{task_type.value} target ({junk_samples}). Check whether another "
+                "column holds the numeric value, or clean this column before uploading."
             )
         df = df.with_columns(_numeric_parse_expr(target_column).alias(target_column))
         changed = True
@@ -180,6 +216,15 @@ def triage_dataset(
                     f"parsed text target to numbers ({rate:.1%} parse rate; currency/"
                     f"thousands separators stripped, vetted unit multipliers applied); "
                     f"{n_junk} unparseable value(s) became missing labels"
+                    + (f" ({junk_samples})" if junk_samples else "")
+                    + (
+                        ". Note: dropping these rows assumes the placeholder is "
+                        "unrelated to the true value — if it marks a specific segment "
+                        "(e.g. premium listings), that segment is under-represented "
+                        "in training and evaluation"
+                        if n_junk
+                        else ""
+                    )
                 ),
             )
         )

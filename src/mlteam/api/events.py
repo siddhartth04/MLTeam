@@ -80,6 +80,7 @@ class RunStatus(StrEnum):
     COMPLETED = "completed"
     REJECTED = "rejected"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class StageState(BaseModel):

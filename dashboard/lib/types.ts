@@ -15,7 +15,8 @@ export type RunStatus =
   | "awaiting_approval"
   | "completed"
   | "rejected"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export interface StageState {
   stage: string;

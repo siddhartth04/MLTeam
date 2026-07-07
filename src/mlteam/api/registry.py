@@ -58,6 +58,7 @@ class RunRecord:
     final_report_id: str | None = None
     error: str | None = None
     llm_cost_usd: float = 0.0
+    cancelled: bool = False  # set to True to signal the run thread to stop gracefully
 
 
 class RunRegistry:
@@ -99,17 +100,49 @@ class RunRegistry:
 
     _ACTIVE_STATUSES = frozenset({RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.AWAITING_APPROVAL})
 
-    def delete(self, run_id: str) -> bool:
-        """Remove a finished run's record. Refuses to delete an in-flight run
-        (its background thread would keep writing to a vanished record)."""
+    def cancel(self, run_id: str) -> bool:
+        """Signal a run to stop gracefully. The background thread checks this
+        flag periodically and exits early, transitioning the run to CANCELLED."""
         with self._lock:
             record = self._runs.get(run_id)
             if record is None:
                 return False
-            if record.status in self._ACTIVE_STATUSES:
+            if record.status not in self._ACTIVE_STATUSES:
+                return False  # already finished; nothing to cancel
+            record.cancelled = True
+        self._publish(
+            run_id,
+            StreamEvent(
+                type="log",
+                data={
+                    "level": "warning",
+                    "stage": None,
+                    "message": "Cancellation requested; run will stop after current operation",
+                }.copy(),
+            ),
+        )
+        return True
+
+    def is_cancelled(self, run_id: str) -> bool:
+        """Check if a run has been cancelled. Used by run threads to detect stop signals."""
+        with self._lock:
+            record = self._runs.get(run_id)
+            return record.cancelled if record else False
+
+    def delete(self, run_id: str) -> bool:
+        """Remove a run's record. Refuses to delete a run that is still running
+        (not cancelled), since its background thread would keep writing to a
+        vanished record. Use cancel() first if the run is in-flight."""
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return False
+            # Allow deletion only if the run is finished or cancelled/rejected.
+            # Do NOT allow deletion of QUEUED or RUNNING unless cancelled.
+            if record.status in (RunStatus.QUEUED, RunStatus.RUNNING) and not record.cancelled:
                 raise RunActiveError(
                     f"run '{run_id}' is still {record.status.value} — "
-                    "reject its pending gate or wait for it to finish before deleting"
+                    "call cancel() first to stop it, then delete"
                 )
             for q in self._subscribers.pop(run_id, []):
                 with contextlib.suppress(queue.Full):

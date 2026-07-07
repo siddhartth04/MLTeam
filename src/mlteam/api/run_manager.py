@@ -212,6 +212,10 @@ def _execute(
         note("Run started", level="success")
         stage(Stage.REQUIREMENT, StageStatus.ACTIVE)
 
+        # Check if cancellation was requested before starting.
+        if registry.is_cancelled(ui_run_id):
+            raise RuntimeError("run cancelled")
+
         # The iterative pipeline runs Gates 1 & 2 internally via `gate`; the
         # reporter drives real per-stage transitions as each agent boundary
         # is crossed (see orchestration/progress.py).
@@ -227,6 +231,9 @@ def _execute(
             hpo_trials=hpo_trials,
             reporter=reporter,
         )
+        # Check if cancellation was requested after the pipeline completes.
+        if registry.is_cancelled(ui_run_id):
+            raise RuntimeError("run cancelled")
         registry.set_cost(ui_run_id, client.total_cost_usd)
         spec = result.initial.problem_spec
         pipeline = result.initial.pipeline
@@ -348,6 +355,21 @@ def _execute(
     except GateRejectedError as exc:
         registry.log(ui_run_id, LogEvent(level="warning", message=f"Run rejected at a gate: {exc}"))
         registry.finish(ui_run_id, status=RunStatus.REJECTED, error=str(exc))
+    except RuntimeError as exc:
+        if "run cancelled" in str(exc):
+            registry.log(ui_run_id, LogEvent(level="warning", message="Run cancelled by user"))
+            registry.finish(ui_run_id, status=RunStatus.CANCELLED, error="User cancelled")
+        else:
+            _log.exception("run_failed", ui_run_id=ui_run_id)
+            registry.log(
+                ui_run_id,
+                LogEvent(
+                    level="error",
+                    message=f"Run failed: {exc}",
+                    extra={"trace": traceback.format_exc()[-1500:]},
+                ),
+            )
+            registry.finish(ui_run_id, status=RunStatus.FAILED, error=str(exc))
     except Exception as exc:  # any failure ends the run cleanly and visibly
         _log.exception("run_failed", ui_run_id=ui_run_id)
         registry.log(

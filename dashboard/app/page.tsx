@@ -145,7 +145,7 @@ export default function LaunchPage() {
                   !demo ? "border-accent/60 bg-accent/10" : "border-base-500/60 bg-base-700/40"
                 }`}
               >
-                <div className="font-semibold text-ink">Live (Claude)</div>
+                <div className="font-semibold text-ink">Live Agents</div>
                 <div className="mt-1 text-xs text-ink-muted">
                   Real LLM agents. Falls back to replay if no API key is set.
                 </div>

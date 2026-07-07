@@ -6,12 +6,13 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Suspense, type ReactNode, useState } from "react";
 import { mutate } from "swr";
 
-import { deleteRun, renameRun, useGates, useRuns } from "@/lib/api";
+import { cancelRun, deleteRun, renameRun, useGates, useRuns } from "@/lib/api";
 
 import { RunProvider, useActiveRun } from "./RunContext";
 import { StatusPill } from "./primitives";
 
-const DELETABLE_STATUSES = new Set(["completed", "failed", "rejected"]);
+const CANCELABLE_STATUSES = new Set(["queued", "running", "awaiting_approval"]);
+const DELETABLE_STATUSES = new Set(["completed", "failed", "rejected", "cancelled"]);
 
 const NAV = [
   { href: "/", label: "Launch", icon: "◆" },
@@ -29,8 +30,24 @@ function RunSelector() {
   const router = useRouter();
   const pathname = usePathname();
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [pendingCancel, setPendingCancel] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const list = runs ?? [];
+
+  async function handleCancel(id: string) {
+    setCancelling(id);
+    try {
+      await cancelRun(id);
+      await mutate("/api/runs");
+    } catch (err) {
+      // eslint-disable-next-line no-alert
+      alert(err instanceof Error ? err.message : "Failed to cancel run");
+    } finally {
+      setCancelling(null);
+      setPendingCancel(null);
+    }
+  }
 
   async function handleDelete(id: string) {
     setDeleting(id);
@@ -69,8 +86,10 @@ function RunSelector() {
         )}
         {list.map((r) => {
           const active = r.ui_run_id === runId;
+          const canCancel = CANCELABLE_STATUSES.has(r.status);
           const canDelete = DELETABLE_STATUSES.has(r.status);
           const confirming = pendingDelete === r.ui_run_id;
+          const cancellingConfirm = pendingCancel === r.ui_run_id;
           return (
             <div
               key={r.ui_run_id}
@@ -89,15 +108,17 @@ function RunSelector() {
                         ? "bg-accent-bright"
                         : r.status === "completed"
                           ? "bg-ok"
-                          : r.status === "failed" || r.status === "rejected"
-                            ? "bg-danger"
-                            : "bg-ink-faint"
+                          : r.status === "cancelled"
+                            ? "bg-warn"
+                            : r.status === "failed" || r.status === "rejected"
+                              ? "bg-danger"
+                              : "bg-ink-faint"
                     }`}
                   />
                 </div>
                 <div className="mono mt-0.5 truncate text-[11px] text-ink-faint">{r.ui_run_id}</div>
               </button>
-              {!confirming && (
+              {!confirming && !cancellingConfirm && (
                 <div className="absolute right-1.5 top-1.5 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
                   <button
                     onClick={(e) => {
@@ -109,6 +130,18 @@ function RunSelector() {
                   >
                     ✎
                   </button>
+                  {canCancel && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setPendingCancel(r.ui_run_id);
+                      }}
+                      title="Cancel running job"
+                      className="rounded-md p-1 text-ink-faint hover:bg-warn/20 hover:text-warn"
+                    >
+                      ⏹
+                    </button>
+                  )}
                   {canDelete && (
                     <button
                       onClick={(e) => {
@@ -121,6 +154,30 @@ function RunSelector() {
                       ✕
                     </button>
                   )}
+                </div>
+              )}
+              {cancellingConfirm && (
+                <div className="absolute inset-0 flex items-center justify-end gap-1.5 rounded-xl bg-base-850/95 px-2">
+                  <span className="text-[11px] text-ink-muted">Cancel?</span>
+                  <button
+                    disabled={cancelling === r.ui_run_id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleCancel(r.ui_run_id);
+                    }}
+                    className="rounded-md bg-warn/80 px-2 py-1 text-[11px] font-medium text-white hover:bg-warn disabled:opacity-50"
+                  >
+                    {cancelling === r.ui_run_id ? "…" : "Yes"}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setPendingCancel(null);
+                    }}
+                    className="rounded-md bg-base-600/60 px-2 py-1 text-[11px] text-ink-muted hover:bg-base-600"
+                  >
+                    No
+                  </button>
                 </div>
               )}
               {confirming && (

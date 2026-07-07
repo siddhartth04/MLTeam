@@ -151,8 +151,21 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             raise HTTPException(404, "run not found")
         return _run_public(record)
 
+    @app.post("/api/runs/{ui_run_id}/cancel")
+    def cancel_run(ui_run_id: str) -> dict[str, bool]:
+        """Signal a running job to stop gracefully. The background thread will
+        exit cleanly at the next checkpoint, transitioning the run to CANCELLED
+        status. Once cancelled, the run can be deleted via DELETE /api/runs/{id}."""
+        cancelled = REGISTRY.cancel(ui_run_id)
+        if not cancelled:
+            raise HTTPException(404, "run not found or already finished")
+        return {"cancelled": True}
+
     @app.delete("/api/runs/{ui_run_id}")
     def delete_run(ui_run_id: str) -> dict[str, bool]:
+        """Delete a run's record and all associated artifacts. Can only delete
+        runs that are finished, rejected, or cancelled. Active runs must be
+        cancelled first via POST /api/runs/{id}/cancel."""
         try:
             deleted = REGISTRY.delete(ui_run_id)
         except RunActiveError as exc:

@@ -111,6 +111,14 @@ export async function resolveGate(
   if (!res.ok) throw new Error(`gate action failed: ${res.status}`);
 }
 
+export async function cancelRun(uiRunId: string): Promise<void> {
+  const res = await fetch(`/api/runs/${enc(uiRunId)}/cancel`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.detail ?? `cancel failed: ${res.status}`);
+  }
+}
+
 export async function deleteRun(uiRunId: string): Promise<void> {
   const res = await fetch(`/api/runs/${enc(uiRunId)}`, { method: "DELETE" });
   if (!res.ok) {

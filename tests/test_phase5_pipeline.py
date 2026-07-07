@@ -62,7 +62,9 @@ def explainability(trained):
         store,
         model,
         train_dataset_id=result.cleaned_dataset_id,
-        task_is_classification=True,
+        task_type=TaskType.BINARY_CLASSIFICATION,
+        primary_metric="roc_auc",
+        n_folds=3,
         run_id=RUN,
     )
     return store, report

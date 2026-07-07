@@ -71,7 +71,6 @@ def seed_demo_run(
 
     from mlteam.agents.deployer import build_deployment_bundle
     from mlteam.agents.explainer import explain_model
-    from mlteam.contracts import is_classification
     from mlteam.orchestration import AutoApproveGate, run_iterative_pipeline
     from mlteam.orchestration.budget import RunBudget
     from mlteam.reporting import ReportInputs, build_final_report
@@ -124,7 +123,9 @@ def seed_demo_run(
             store,
             result.best_model,
             train_dataset_id=pipeline.modeling_dataset_id,
-            task_is_classification=is_classification(spec.task_type),
+            task_type=spec.task_type,
+            primary_metric=spec.primary_metric,
+            n_folds=3,
             run_id=result.initial.run_id,
         )
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")

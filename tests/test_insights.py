@@ -62,7 +62,9 @@ def test_residual_analysis_produces_figures_and_worst_slice(tmp_path: Path):
         store,
         model,
         train_dataset_id=result.cleaned_dataset_id,
-        task_is_classification=False,
+        task_type=TaskType.REGRESSION,
+        primary_metric="rmse",
+        n_folds=3,
         run_id=result.run_id,
         seed=42,
     )
@@ -99,7 +101,9 @@ def test_classification_run_has_no_residual_slices(tmp_path: Path):
         store,
         model,
         train_dataset_id=result.cleaned_dataset_id,
-        task_is_classification=True,
+        task_type=TaskType.BINARY_CLASSIFICATION,
+        primary_metric="roc_auc",
+        n_folds=3,
         run_id=result.run_id,
         seed=42,
     )
@@ -124,7 +128,9 @@ def test_narrator_builds_findings_and_caveats(tmp_path: Path):
         store,
         model,
         train_dataset_id=result.cleaned_dataset_id,
-        task_is_classification=False,
+        task_type=TaskType.REGRESSION,
+        primary_metric="rmse",
+        n_folds=3,
         run_id=result.run_id,
         seed=42,
     )
@@ -159,7 +165,9 @@ def test_narrator_skips_loudly_on_bad_generation(tmp_path: Path):
         store,
         model,
         train_dataset_id=result.cleaned_dataset_id,
-        task_is_classification=False,
+        task_type=TaskType.REGRESSION,
+        primary_metric="rmse",
+        n_folds=3,
         run_id=result.run_id,
         seed=42,
     )

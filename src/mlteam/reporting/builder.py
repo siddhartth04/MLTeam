@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import structlog
 
+from mlteam.agents.time_features import resolve_horizon
 from mlteam.agents.trainer import _temporal_to_epoch
 from mlteam.contracts import (
     CleaningManifest,
@@ -26,6 +27,7 @@ from mlteam.contracts import (
     InsightNarrative,
     ProblemSpec,
     SplitPlan,
+    TaskType,
     TrainedModel,
     new_artifact,
     utcnow,
@@ -277,6 +279,11 @@ def build_final_report(
             "target_column": inputs.problem.target_column,
             "primary_metric": inputs.problem.primary_metric,
         },
+        forecast_horizon=(
+            resolve_horizon(inputs.problem.prediction_horizon)
+            if inputs.problem.task_type is TaskType.FORECASTING
+            else None
+        ),
         best_template=inputs.best_template_id,
         best_experiment=inputs.best_experiment_id,
         cv_metrics=[

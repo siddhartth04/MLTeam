@@ -278,8 +278,16 @@ def run_tabular_pipeline(
     mlflow_enabled: bool = False,
     env_lock_path: Path | None = None,
     time_column: str | None = None,
+    forecast_horizon: int = 1,
 ) -> PipelineResult:
-    """Run the full deterministic pipeline and return every artifact handle."""
+    """Run the full deterministic pipeline and return every artifact handle.
+
+    ``forecast_horizon`` (FORECASTING only): the number of steps ahead being
+    predicted. Passed straight to ``engineer_time_features`` so lag/rolling
+    features only use information realizable that many steps before the
+    forecast origin — see ``agents/time_features.py`` for why h>1 must drop
+    the closer lags. Ignored for non-forecasting task types.
+    """
     run_id = run_id or new_run_id()
     raw = ingest_file(
         store,
@@ -311,6 +319,7 @@ def run_tabular_pipeline(
             time_column=time_column,
             target_column=target_column,
             run_id=run_id,
+            horizon=forecast_horizon,
         )
         modeling_id = featured.meta.artifact_id
     raw_profile = profile_dataset(store, modeling_id, run_id=run_id, seed=seed)

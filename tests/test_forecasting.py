@@ -11,7 +11,7 @@ import pytest
 
 from mlteam.agents import ingest_file, plan_split
 from mlteam.agents.splitter import detect_time_column
-from mlteam.agents.time_features import add_forecast_features
+from mlteam.agents.time_features import add_forecast_features, resolve_horizon
 from mlteam.agents.trainer import _make_cv
 from mlteam.contracts import SplitStrategy, TaskType
 
@@ -88,6 +88,66 @@ def test_add_forecast_features_lag_values_are_past_only():
     for row in out.head(5).iter_rows(named=True):
         prev_day = row["date"] - timedelta(days=1)
         assert row["sales_lag_1"] == pytest.approx(sales_by_date[prev_day])
+
+
+def test_add_forecast_features_horizon_1_is_byte_identical_to_default():
+    df = make_series_frame()
+    explicit = add_forecast_features(
+        df, time_column="date", target_column="sales", horizon=1
+    )
+    default = add_forecast_features(df, time_column="date", target_column="sales")
+    assert explicit.equals(default)
+
+
+def test_add_forecast_features_horizon_7_drops_unrealizable_close_lags():
+    df = make_series_frame()
+    out = add_forecast_features(
+        df, time_column="date", target_column="sales", horizon=7
+    )
+    for col in ("sales_lag_1", "sales_lag_2", "sales_lag_3"):
+        assert col not in out.columns, f"{col} should not exist at horizon=7"
+    assert "sales_lag_7" in out.columns
+    # rolling windows must also start no closer than the horizon
+    assert out.null_count().sum_horizontal().item() == 0
+
+
+def test_add_forecast_features_horizon_matches_lag_shift():
+    """At horizon=h, sales_lag_h on row t must equal the true value h days back."""
+    df = make_series_frame(n=40)
+    horizon = 3
+    out = add_forecast_features(
+        df, time_column="date", target_column="sales", horizon=horizon
+    )
+    sales_by_date = dict(zip(df["date"].to_list(), df["sales"].to_list(), strict=True))
+    for row in out.head(5).iter_rows(named=True):
+        origin_minus_h = row["date"] - timedelta(days=horizon)
+        assert row["sales_lag_3"] == pytest.approx(sales_by_date[origin_minus_h])
+
+
+def test_add_forecast_features_horizon_beyond_vetted_lags_fails_loudly():
+    with pytest.raises(ValueError, match="exceeds every vetted lag"):
+        add_forecast_features(
+            make_series_frame(), time_column="date", target_column="sales", horizon=30
+        )
+
+
+def test_add_forecast_features_rejects_invalid_horizon():
+    with pytest.raises(ValueError, match="horizon must be >= 1"):
+        add_forecast_features(
+            make_series_frame(), time_column="date", target_column="sales", horizon=0
+        )
+
+
+def test_resolve_horizon_parses_leading_integer():
+    assert resolve_horizon("7 days") == 7
+    assert resolve_horizon("next 14 days") == 14
+    assert resolve_horizon("1") == 1
+
+
+def test_resolve_horizon_defaults_to_one_step_when_unparseable():
+    assert resolve_horizon(None) == 1
+    assert resolve_horizon("next month") == 1
+    assert resolve_horizon("") == 1
 
 
 def test_add_forecast_features_rejects_non_numeric_target():
@@ -222,3 +282,88 @@ def test_forecasting_pipeline_end_to_end(guarded_store, series_csv):
         d for d in report.baseline_deltas if d.metric == "rmse" and "dummy" in d.baseline_name
     )
     assert rmse_delta.model_value < rmse_delta.baseline_value
+
+
+def test_forecasting_pipeline_honors_declared_horizon(guarded_store, series_csv):
+    """A 7-step horizon must reach the feature engineer through the pipeline
+    entrypoint, not just the unit-level add_forecast_features call."""
+    from mlteam.orchestration.pipeline import run_tabular_pipeline
+
+    result = run_tabular_pipeline(
+        guarded_store,
+        series_csv,
+        target_column="sales",
+        task_type=TaskType.FORECASTING,
+        primary_metric="rmse",
+        seed=42,
+        n_folds=3,
+        include_tabpfn=False,
+        forecast_horizon=7,
+    )
+    from mlteam.agents.data_io import read_dataset
+
+    cleaned = read_dataset(guarded_store, guarded_store.get(result.cleaned_dataset_id))
+    for col in ("sales_lag_1", "sales_lag_2", "sales_lag_3"):
+        assert col not in cleaned.columns, f"{col} unrealizable at horizon=7"
+    assert "sales_lag_7" in cleaned.columns
+
+
+def test_final_report_renders_forecast_horizon_line(guarded_store, series_csv):
+    from mlteam.agents import critique_evaluation
+    from mlteam.contracts import ProblemSpec, new_artifact
+    from mlteam.llm import FixtureTransport, LLMClient
+    from mlteam.orchestration.pipeline import run_tabular_pipeline
+    from mlteam.reporting import ReportInputs, build_final_report
+
+    result = run_tabular_pipeline(
+        guarded_store,
+        series_csv,
+        target_column="sales",
+        task_type=TaskType.FORECASTING,
+        primary_metric="rmse",
+        seed=42,
+        n_folds=3,
+        include_tabpfn=False,
+        forecast_horizon=3,
+    )
+    model = next(
+        r.model for k, r in result.train_results.items() if "dummy" not in k
+    )
+    problem = new_artifact(
+        ProblemSpec,
+        producer_agent="test",
+        run_id=RUN,
+        task_type=TaskType.FORECASTING,
+        target_column="sales",
+        primary_metric="rmse",
+        prediction_horizon="3 days",
+        time_column="date",
+        human_confirmed=True,
+    )
+    critique = critique_evaluation(
+        LLMClient(
+            FixtureTransport.from_texts(
+                '{"findings": [], "verdict": "approve", "iteration_actions": []}'
+            ),
+            model="claude-sonnet-4-6",
+        ),
+        guarded_store,
+        report=result.evaluation_report,
+        primary_metric="rmse",
+        run_id=RUN,
+    )
+    inputs = ReportInputs(
+        problem=problem,
+        model=model,
+        evaluation=result.evaluation_report,
+        critique=critique,
+        split_plan=guarded_store.get(result.split_plan_id),
+        goal_text="forecast sales 3 days ahead",
+        best_template_id=result.best_template_id,
+        best_experiment_id=model.experiment_id,
+    )
+    final = build_final_report(guarded_store, inputs, run_id=RUN)
+    technical = guarded_store.blob_path(final.technical_report_blob).read_text(
+        encoding="utf-8"
+    )
+    assert "3-step-ahead" in technical

@@ -97,6 +97,11 @@ _TECHNICAL_TEMPLATE = """<!doctype html>
 <tr><th>Target</th><td>{{ problem.target_column }}</td></tr>
 <tr><th>Primary metric</th><td>{{ problem.primary_metric }}</td></tr>
 <tr><th>Best model</th><td>{{ best_template }} ({{ best_experiment }})</td></tr>
+{% if forecast_horizon is not none %}
+<tr><th>Forecast horizon</th><td>{{ forecast_horizon }}-step-ahead — every metric below
+(CV and holdout) measures the model's ability to predict {{ forecast_horizon }} step(s)
+into the future, not the next single observation.</td></tr>
+{% endif %}
 </table>
 
 <h2>Cross-validation metrics</h2>

@@ -32,7 +32,7 @@ from mlteam.agents.preview import column_preview
 from mlteam.agents.profiler import profile_dataset
 from mlteam.agents.requirement import understand_requirements
 from mlteam.agents.splitter import detect_time_column, plan_split
-from mlteam.agents.time_features import engineer_time_features
+from mlteam.agents.time_features import engineer_time_features, resolve_horizon
 from mlteam.agents.trainer import compute_env_hash
 from mlteam.agents.triage import triage_dataset
 from mlteam.contracts import CritiqueReport, ExperimentSpec, ProblemSpec, TaskType
@@ -291,12 +291,14 @@ def run_agentic_pipeline(
 
         if time_column is None:
             time_column = detect_time_column(read_dataset(store, triaged))
+        horizon = resolve_horizon(spec.prediction_horizon)
         featured = engineer_time_features(
             store,
             triaged.meta.artifact_id,
             time_column=time_column,
             target_column=spec.target_column,
             run_id=run_id,
+            horizon=horizon,
         )
         modeling_id = featured.meta.artifact_id
 

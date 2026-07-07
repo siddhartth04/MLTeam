@@ -134,6 +134,14 @@ class PipelineResult:
     feature_dataset_id: str | None = None
     # The data-readiness decisions made before profiling/splitting.
     triage_report_id: str | None = None
+    # The AUTHORITATIVE dummy-floor experiment_id for THIS run's plan. Since
+    # screening results (audit Task 8) are merged into train_results
+    # alongside the plan's own specs, more than one entry can share
+    # template_id == "dummy_baseline" (e.g. "screen-dummy" AND "exp-dummy");
+    # downstream code must use THIS field rather than scanning train_results
+    # for the first dummy_baseline match, which would nondeterministically
+    # pick whichever dummy happened to be inserted first.
+    dummy_experiment_id: str | None = None
 
     @property
     def modeling_dataset_id(self) -> str:
@@ -375,4 +383,5 @@ def run_tabular_pipeline(
         train_results=results,
         skipped_experiments=skipped,
         triage_report_id=triage_report.meta.artifact_id,
+        dummy_experiment_id=dummy_key,
     )

@@ -62,12 +62,31 @@ def test_loop_stops_on_approval(approved_run):
     assert len(result.iterations) == 1
 
 
-def test_iteration_trained_hpo_and_revision(approved_run):
+def test_iteration_trained_revision(approved_run):
     _, result = approved_run
     record = result.iterations[0]
-    assert any(eid.startswith("hpo-") for eid in record.new_experiment_ids)
+    # Audit Task 8: screening results now compete for selection, and on this
+    # fixture screen-linear (linear_default) genuinely outscores every
+    # planned lightgbm candidate. HPO is correctly SKIPPED this iteration --
+    # linear_default has no vetted Optuna search space (SEARCH_SPACES only
+    # covers tree-ensemble templates), so there is nothing for HPO to tune
+    # on the current best. This is honest behavior, not a regression: before
+    # Task 8, HPO always fired here only because a lightgbm candidate was
+    # unconditionally "best" among the (screening-blind) planned set.
+    assert not any(eid.startswith("hpo-") for eid in record.new_experiment_ids)
     assert "exp-lgbm-rev1" in record.new_experiment_ids
     assert record.verdict is Verdict.APPROVE
+
+
+def test_screening_winner_is_selectable_even_when_not_hpo_tunable(approved_run):
+    """The whole point of audit Task 8: a screening probe (here,
+    screen-linear) can be the FINAL winner across the whole run, even
+    though it was never in the LLM's plan and even though it can't be
+    HPO-tuned -- selection is honest about which trained candidate is
+    actually best, not restricted to the planner's candidate list."""
+    _, result = approved_run
+    assert result.best_experiment_id == "screen-linear"
+    assert result.best_model.template_id == "linear_default"
 
 
 def test_budget_snapshot_recorded(approved_run):

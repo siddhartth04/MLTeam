@@ -131,7 +131,14 @@ def run_iterative_pipeline(
     env_hash = compute_env_hash()
 
     results: dict[str, TrainResult] = dict(initial.pipeline.train_results)
-    dummy_key = next(eid for eid, r in results.items() if r.model.template_id == "dummy_baseline")
+    # Use the plan's AUTHORITATIVE dummy experiment id (audit Task 8): with
+    # screening results merged into train_results, more than one entry can
+    # have template_id == "dummy_baseline" (e.g. "screen-dummy" alongside
+    # the plan's own "exp-dummy"), so scanning for the first match is no
+    # longer well-defined.
+    dummy_key = initial.pipeline.dummy_experiment_id or next(
+        eid for eid, r in results.items() if r.model.template_id == "dummy_baseline"
+    )
     report = initial.pipeline.evaluation_report
     critique = initial.critique
     records: list[IterationRecord] = []

@@ -228,6 +228,12 @@ function DossierBlock({
   return (
     <div className={className}>
       <div className="label-eyebrow mb-2">Why trust this model</div>
+      {dossier.selected_among > 0 && (
+        <p className="mb-2 text-xs text-ink-faint">
+          Selected as the best of {dossier.selected_among} trained candidate
+          {dossier.selected_among === 1 ? "" : "s"} (excluding the dummy floor).
+        </p>
+      )}
 
       {dossier.comparison.length > 0 && (
         <table className="w-full text-sm">

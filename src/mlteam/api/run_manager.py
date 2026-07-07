@@ -134,7 +134,12 @@ def launch_run(
     store_root: Path,
     model: str = "claude-sonnet-4-6",
     seed: int = 42,
-    n_folds: int = 3,
+    # 5, not 3 (audit finding M4): k=3 is the weakest defensible CV, and
+    # combined with the paired significance test (Task 2) it makes a
+    # genuinely large improvement come out borderline-non-significant purely
+    # from having too few folds to establish confidence, not from the
+    # improvement being small.
+    n_folds: int = 5,
     name: str = "",
     registry: RunRegistry = REGISTRY,
 ) -> threading.Thread:

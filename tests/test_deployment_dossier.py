@@ -163,6 +163,66 @@ def test_dossier_includes_critique_findings():
     assert dossier["critique"]["findings"][0]["severity"] == "low"
 
 
+def test_dossier_margin_anchors_on_deployed_model_not_ranked_first(guarded_store):
+    """Audit Task 8/M1: the dossier's winner_margin must describe the model
+    ACTUALLY BEING DEPLOYED (model.experiment_id), not whichever completed
+    outcome happens to rank first by the metric. Before this fix, a human
+    reviewing Gate 3 could see a margin table describing a DIFFERENT model
+    than the one they were being asked to sign off on -- e.g. if the
+    outcome set includes a stronger candidate the selector never actually
+    picked (a screening probe scored after deployment was already chosen,
+    or a human-overridden pick)."""
+    outcomes = (
+        _outcome("exp-dummy", "dummy_baseline", roc_auc=0.50),
+        _outcome("exp-deployed", "lightgbm_default", roc_auc=0.80),
+        # A LATER, stronger outcome that was never actually selected/deployed
+        # (e.g. it completed after the deployment decision was made).
+        _outcome("exp-stronger-but-not-deployed", "catboost_default", roc_auc=0.95),
+    )
+    deployed_model = _model("exp-deployed", "lightgbm_default")
+    dossier = build_deployment_dossier(
+        model=deployed_model,
+        problem=_spec(),
+        train_dataset_id="ds-1",
+        split_plan_id=None,
+        outcomes=outcomes,
+    )
+    # The comparison table's WINNER flag still correctly marks the deployed
+    # model (existing behavior, unaffected).
+    winner_row = next(r for r in dossier["comparison"] if r["is_winner"])
+    assert winner_row["experiment_id"] == "exp-deployed"
+
+    # The margin describes exp-deployed (0.80) vs its runner-up among
+    # OTHER candidates -- catboost (0.95) -- and vs dummy (0.50). It must
+    # NOT silently describe catboost as if catboost were the winner.
+    margin = dossier["winner_margin"]
+    assert margin["vs_runner_up"]["template_id"] == "catboost_default"
+    # signed_improvement(roc_auc, deployed=0.80, stronger=0.95) is NEGATIVE
+    # -- the deployed model is actually BEHIND its "runner-up" here, which
+    # is exactly the scenario a human needs surfaced honestly, not hidden
+    # behind a margin computed for a different model.
+    assert margin["vs_runner_up"]["improvement"] < 0
+    assert abs(margin["vs_dummy"] - 0.30) < 1e-9  # 0.80 - 0.50
+
+
+def test_dossier_reports_selected_among_count():
+    outcomes = (
+        _outcome("exp-dummy", "dummy_baseline", roc_auc=0.50),
+        _outcome("exp-winner", "lightgbm_default", roc_auc=0.90),
+        _outcome("exp-b", "random_forest_default", roc_auc=0.85),
+        _outcome("exp-c", "catboost_default", roc_auc=0.80),
+    )
+    dossier = build_deployment_dossier(
+        model=_model("exp-winner", "lightgbm_default"),
+        problem=_spec(),
+        train_dataset_id="ds-1",
+        split_plan_id=None,
+        outcomes=outcomes,
+    )
+    # 3 non-dummy completed candidates (winner + 2 others); dummy excluded.
+    assert dossier["selected_among"] == 3
+
+
 def test_dossier_handles_no_optional_inputs_gracefully():
     dossier = build_deployment_dossier(
         model=_model("exp-winner", "lightgbm_default"),
@@ -172,6 +232,7 @@ def test_dossier_handles_no_optional_inputs_gracefully():
     )
     assert dossier["comparison"] == []
     assert dossier["winner_margin"] is None
+    assert dossier["selected_among"] == 0
     assert dossier["top_features"] == []
     assert dossier["critique"] is None
 

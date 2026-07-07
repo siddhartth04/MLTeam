@@ -188,6 +188,7 @@ export interface DossierFieldChecks {
 export interface DeploymentDossier {
   comparison: DossierComparisonRow[];
   winner_margin: DossierWinnerMargin | null;
+  selected_among: number;
   top_features: DossierTopFeature[];
   critique: DossierCritique | null;
   field_checks: DossierFieldChecks | null;

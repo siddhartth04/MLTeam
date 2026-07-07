@@ -124,11 +124,14 @@ def _run_screening(
     n_folds: int,
     env_hash: str,
     mlflow_enabled: bool,
-) -> list[dict[str, object]]:
-    """Train the cheap probe trio and return their results as plain dicts for
-    the planner payload. Never raises for a non-dummy probe failure — a
-    linear-model failure (e.g. all-categorical data) is itself informative
-    and simply produces one fewer screening result, not a broken run."""
+) -> tuple[list[dict[str, object]], dict[str, TrainResult]]:
+    """Train the cheap probe trio; return (a) plain-dict summaries for the
+    planner's LLM payload and (b) the actual TrainResults, keyed by
+    experiment_id, so screening models can COMPETE for selection alongside
+    the planned candidates (audit Task 8/M2) instead of being informative-
+    only. Never raises for a non-dummy probe failure — a linear-model
+    failure (e.g. all-categorical data) is itself informative and simply
+    produces one fewer screening result, not a broken run."""
     specs = tuple(
         ExperimentSpec(
             experiment_id=_screening_experiment_id(template),
@@ -138,7 +141,7 @@ def _run_screening(
         )
         for template in _SCREENING_TEMPLATES
     )
-    _results, _skipped = _train_all(
+    results, _skipped = _train_all(
         store,
         dataset_id,
         specs,
@@ -153,7 +156,7 @@ def _run_screening(
     outcomes = [
         o for o in list_experiment_outcomes(store, run_id) if o.experiment_id in screen_ids
     ]
-    return [
+    summaries = [
         {
             "template": o.template_id,
             "primary_metric_mean": next(
@@ -167,6 +170,7 @@ def _run_screening(
         }
         for o in outcomes
     ]
+    return summaries, results
 
 
 @dataclass(frozen=True)
@@ -361,7 +365,7 @@ def run_agentic_pipeline(
     reporter.stage("plan", "active")
     env_hash = compute_env_hash()
     reporter.log("Running screening probes (dummy, linear, lightgbm)", stage="plan")
-    screening_results = _run_screening(
+    screening_results, screening_train_results = _run_screening(
         store,
         modeling_dataset.meta.artifact_id,
         task_type=spec.task_type,
@@ -446,15 +450,26 @@ def run_agentic_pipeline(
     )
     dummy_key = _dummy_key(tuple(specs))
     _check_experiment_quorum(tuple(specs), results, skipped, dummy_key)
-    best_key = _select_best(results, spec.primary_metric, dummy_key)
+    # Screening probes (dummy/linear/lightgbm, trained BEFORE the plan was
+    # drafted) compete for selection alongside the planned candidates,
+    # instead of being informative-only evidence the planner reads but the
+    # selector ignores (audit Task 8/M2) — they are first-class TrainResults
+    # like any planned experiment, just produced earlier. The plan's own
+    # dummy_key stays authoritative for the dummy floor either way.
+    all_results = {**screening_train_results, **results}
+    best_key = _select_best(all_results, spec.primary_metric, dummy_key)
     reporter.stage("train", "done", detail=f"{len(results)} completed, {len(skipped)} skipped")
-    reporter.log(f"Trained {len(results)} experiment(s); winner so far: {best_key}", stage="train")
+    reporter.log(
+        f"Trained {len(results)} experiment(s) (+{len(screening_train_results)} screening); "
+        f"winner so far: {best_key}",
+        stage="train",
+    )
 
     reporter.stage("evaluate", "active")
     report = build_evaluation_report(
         store,
         run_id=run_id,
-        model_result=results[best_key],
+        model_result=all_results[best_key],
         dummy_result=results[dummy_key],
         profile=train_profile,
         primary_metric=spec.primary_metric,
@@ -499,9 +514,10 @@ def run_agentic_pipeline(
         feature_dataset_id=feature_dataset_id,
         triage_report_id=triage_report.meta.artifact_id,
         evaluation_report=report,
-        best_template_id=results[best_key].model.template_id,
-        train_results=results,
+        best_template_id=all_results[best_key].model.template_id,
+        train_results=all_results,
         skipped_experiments=skipped,
+        dummy_experiment_id=dummy_key,
     )
     return AgenticResult(
         run_id=run_id,

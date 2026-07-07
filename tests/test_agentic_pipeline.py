@@ -71,14 +71,26 @@ def test_feature_plan_stored(agentic_run):
 def test_llm_experiment_plan_trained_extra_candidate(agentic_run):
     _, result = agentic_run
     # Fixture plan: dummy + lgbm default + tuned lgbm candidate (same template,
-    # distinct experiment ids — results must not collide).
+    # distinct experiment ids — results must not collide). Screening probes
+    # (screen-dummy/screen-linear/screen-lightgbm) are ALSO present: audit
+    # Task 8 merges them into train_results so they compete for selection
+    # instead of being informative-only evidence the planner reads but the
+    # selector ignores.
     assert result.pipeline.experiment_plan_id
     assert set(result.pipeline.train_results) == {
         "exp-dummy",
         "exp-lgbm-default",
         "exp-lgbm-tuned",
+        "screen-dummy",
+        "screen-linear",
+        "screen-lightgbm",
     }
-    assert result.pipeline.best_template_id == "lightgbm_default"
+    # On this fixture, screen-linear (roc_auc 0.772) genuinely outscores
+    # every planned candidate including exp-lgbm-default (0.769) -- this is
+    # the HONEST winner, not a regression: before Task 8, a real fixture
+    # figure was inaccessible for selection purely because it was trained
+    # a few lines earlier in the pipeline than the planned candidates.
+    assert result.pipeline.best_template_id == "linear_default"
 
 
 def test_critique_produced_and_holdout_untouched(agentic_run):

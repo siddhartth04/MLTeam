@@ -102,20 +102,25 @@ def build_deployment_dossier(
         if o.state != ExperimentState.COMPLETED
     ]
 
+    # The margin must describe the model actually being deployed, not
+    # whichever completed candidate happens to rank first by the metric
+    # (audit Task 8/M1) -- these differ whenever the deployed model isn't
+    # ranked[0] (e.g. a human overrode the selector's pick, or the outcome
+    # set includes runs the selector never saw). Anchor on model.experiment_id.
     winner_margin: dict[str, Any] | None = None
-    if len(ranked) >= 1:
-        winner = ranked[0]
-        winner_value = _metric_mean(winner, primary)
+    deployed = next((o for o in completed if o.experiment_id == model.experiment_id), None)
+    if deployed is not None:
+        winner_value = _metric_mean(deployed, primary)
+        runner_up = next((o for o in ranked if o.experiment_id != deployed.experiment_id), None)
         vs_runner_up = None
-        if len(ranked) >= 2:
-            runner_up = ranked[1]
+        if runner_up is not None and winner_value is not None:
             runner_up_value = _metric_mean(runner_up, primary)
             vs_runner_up = {
                 "template_id": runner_up.template_id,
                 "improvement": signed_improvement(primary, winner_value, runner_up_value),
             }
         vs_dummy = None
-        if dummy is not None:
+        if dummy is not None and winner_value is not None:
             dummy_value = _metric_mean(dummy, primary)
             if dummy_value is not None:
                 vs_dummy = signed_improvement(primary, winner_value, dummy_value)
@@ -127,7 +132,7 @@ def build_deployment_dossier(
         # 0.02 means very different things at std=0.001 versus std=0.05.
         if dummy is not None:
             stds_margin = compute_winner_margin(
-                outcomes, primary, winner.experiment_id, dummy.experiment_id
+                outcomes, primary, deployed.experiment_id, dummy.experiment_id
             )
             if winner_margin["vs_runner_up"] is not None:
                 winner_margin["vs_runner_up"]["improvement_stds"] = stds_margin.vs_runner_up_stds
@@ -172,6 +177,12 @@ def build_deployment_dossier(
     return {
         "comparison": comparison,
         "winner_margin": winner_margin,
+        # Disclosure (audit Task 8/M1): the winner was picked as the best of
+        # this many trained, completed candidates (excluding the dummy
+        # floor) -- selecting a max over more candidates has a larger
+        # winner's-curse bias, and a reader should be able to see how wide
+        # the field actually was.
+        "selected_among": len(candidates),
         "top_features": top_features,
         "critique": critique_summary,
         "field_checks": field_checks,

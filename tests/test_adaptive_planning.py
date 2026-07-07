@@ -54,7 +54,7 @@ def _spec_artifact(store, task_type=TaskType.BINARY_CLASSIFICATION, primary_metr
 
 def test_screening_persists_real_outcomes(guarded_store, churn_csv):
     dataset = ingest_file(guarded_store, churn_csv, target_column="churned", run_id=RUN)
-    results = _run_screening(
+    summaries, train_results = _run_screening(
         guarded_store,
         dataset.meta.artifact_id,
         task_type=TaskType.BINARY_CLASSIFICATION,
@@ -66,13 +66,19 @@ def test_screening_persists_real_outcomes(guarded_store, churn_csv):
         env_hash="test-env",
         mlflow_enabled=False,
     )
-    assert len(results) == 3
-    templates = {r["template"] for r in results}
+    assert len(summaries) == 3
+    templates = {r["template"] for r in summaries}
     assert templates == {"dummy_baseline", "linear_default", "lightgbm_default"}
-    for r in results:
+    for r in summaries:
         assert r["state"] == "completed"
         assert r["primary_metric_mean"] is not None
         assert r["wall_time_seconds"] >= 0
+
+    # Audit Task 8: _run_screening also returns the actual TrainResults,
+    # keyed by experiment_id, so screening models can compete for selection
+    # alongside planned candidates instead of being informative-only.
+    assert set(train_results) == {"screen-dummy", "screen-linear", "screen-lightgbm"}
+    assert all(r.model.template_id in templates for r in train_results.values())
 
     outcomes = list_experiment_outcomes(guarded_store, RUN)
     screen_outcomes = [o for o in outcomes if o.experiment_id.startswith("screen-")]

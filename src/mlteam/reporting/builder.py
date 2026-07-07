@@ -388,6 +388,19 @@ def build_final_report(
         },
     )
 
+    # Defense-in-depth (Task 3): re-check the RENDERED HTML for wrong-task
+    # vocabulary. validate_report_inputs already screens the inputs, but a
+    # future template edit or LLM-narrated insight text could still leak a
+    # metric name illegal for this task type -- catching it here means the
+    # failure is caught regardless of how it got introduced, not just at
+    # the one input shape Task 2 knows to check.
+    from mlteam.reporting.contract import lint_report_html
+
+    task_type = inputs.problem.task_type
+    primary_metric = inputs.problem.primary_metric
+    lint_report_html(business_html, task_type=task_type, primary_metric=primary_metric)
+    lint_report_html(technical_html, task_type=task_type, primary_metric=primary_metric)
+
     business_blob = store.put_blob(business_html.encode("utf-8"))
     technical_blob = store.put_blob(technical_html.encode("utf-8"))
     headline_dict = {m["name"]: float(m["value"]) for m in holdout_metrics}

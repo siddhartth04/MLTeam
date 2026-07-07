@@ -321,6 +321,7 @@ def test_final_report_renders_forecast_horizon_line(guarded_store, series_csv):
         target_column="sales",
         task_type=TaskType.FORECASTING,
         primary_metric="rmse",
+        run_id=RUN,
         seed=42,
         n_folds=3,
         include_tabpfn=False,

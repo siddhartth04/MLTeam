@@ -226,7 +226,21 @@ def _render(template_str: str, **context: Any) -> str:
 def build_final_report(
     store: GuardedArtifactStore, inputs: ReportInputs, *, run_id: str
 ) -> FinalReport:
-    """Render + store both reports and return a FinalReport artifact."""
+    """Render + store both reports and return a FinalReport artifact.
+
+    Validates ``inputs`` (and their membership in ``run_id``) before doing
+    any work: a caller-assembly bug -- passing one run's evaluation next to
+    another run's model, or a task-illegal metric slipping into the
+    evaluation -- must fail loudly here, not render a plausible-looking
+    report describing the wrong thing.
+    """
+    # Local import: mlteam.reporting.contract imports ReportInputs from this
+    # module, so importing it at module level would be a circular import.
+    from mlteam.reporting.contract import validate_report_inputs, validate_run_membership
+
+    validate_report_inputs(inputs)
+    validate_run_membership(store, inputs, run_id=run_id)
+
     holdout_metrics = _holdout_metrics(store, inputs)
     headline_cards = _headline(inputs, holdout_metrics)
     generated_at = utcnow().isoformat(timespec="seconds")

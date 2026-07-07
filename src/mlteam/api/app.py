@@ -26,6 +26,7 @@ from mlteam.api.config import APISettings, get_settings
 from mlteam.api.demo import seed_demo_run
 from mlteam.api.registry import REGISTRY, RunActiveError, RunRecord
 from mlteam.api.run_manager import launch_run
+from mlteam.api.run_store import RunStore
 from mlteam.api.views import (
     artifact_detail,
     critique_view,
@@ -119,6 +120,12 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # registry.db lives beside the artifact store's own guard.db but is
+        # a SEPARATE file/connection: run bookkeeping and artifact lineage
+        # are different concerns with different lifecycles (deleting a run
+        # record must never touch artifact lineage, and vice versa).
+        REGISTRY.attach_store(RunStore(settings.store_root / "registry.db"))
+        REGISTRY.load_from_store()
         if settings.seed_demo:
             seed_demo_run(store_root=settings.store_root, data_dir=settings.upload_dir)
         yield

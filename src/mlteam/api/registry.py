@@ -14,6 +14,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import structlog
+
 from mlteam.api.events import (
     GATE_STAGES,
     LogEvent,
@@ -24,7 +26,10 @@ from mlteam.api.events import (
     StreamEvent,
     initial_stage_states,
 )
+from mlteam.api.run_store import RunStore
 from mlteam.contracts.base import utcnow
+
+_log = structlog.get_logger(__name__)
 
 _MAX_EVENTS = 2000
 _QUEUE_MAXSIZE = 1000
@@ -62,12 +67,87 @@ class RunRecord:
 
 
 class RunRegistry:
-    """Holds all runs and their live streams."""
+    """Holds all runs and their live streams.
 
-    def __init__(self) -> None:
+    Optionally backed by a ``RunStore`` (attach via ``attach_store``) that
+    write-persists every field a fresh process needs to reconstruct
+    provenance after a restart: identity, goal/dataset, status, the
+    pipeline run id, the final report id, and stage history. Events, the
+    pending-gate handshake, and the cancellation flag stay in-memory only
+    -- see run_store.py's module docstring for why persisting those would
+    create unrecoverable phantom state.
+    """
+
+    def __init__(self, run_store: RunStore | None = None) -> None:
         self._lock = threading.RLock()
         self._runs: dict[str, RunRecord] = {}
         self._subscribers: dict[str, list[queue.Queue[StreamEvent]]] = {}
+        self._store: RunStore | None = run_store
+
+    def attach_store(self, run_store: RunStore) -> None:
+        """Bind a ``RunStore`` after construction (called from the API
+        lifespan) so tests can construct a bare in-memory ``RunRegistry()``
+        without touching disk unless they explicitly opt in."""
+        with self._lock:
+            self._store = run_store
+
+    def load_from_store(self) -> None:
+        """Populate the registry from persisted rows. Call once at startup,
+        before accepting any request. A run persisted mid-flight (its
+        background thread died with the old process) is loaded as FAILED
+        with an honest error -- there is no thread left to ever finish it,
+        so leaving it QUEUED/RUNNING would strand it forever in a state the
+        dashboard can neither resolve nor explain."""
+        if self._store is None:
+            return
+        with self._lock:
+            for row in self._store.load_all():
+                status = row["status"]
+                error = row["error"]
+                if status in self._ACTIVE_STATUSES:
+                    status = RunStatus.FAILED
+                    error = "interrupted by server restart"
+                record = RunRecord(
+                    run_id=row["ui_run_id"],
+                    goal_text=row["goal_text"],
+                    dataset_name=row["dataset_name"],
+                    name=row["name"],
+                    status=status,
+                    created_at=row["created_at"],
+                    stages=row["stages"],
+                    result_run_id=row["result_run_id"],
+                    final_report_id=row["final_report_id"],
+                    error=error,
+                    llm_cost_usd=row["llm_cost_usd"],
+                )
+                self._runs[record.run_id] = record
+                self._subscribers[record.run_id] = []
+                if status != row["status"]:
+                    # The row's on-disk status is now stale; persist the
+                    # correction immediately rather than waiting for some
+                    # future mutation that may never come for a dead run.
+                    self._persist(record)
+
+    def _persist(self, record: RunRecord) -> None:
+        """Write ``record``'s persistable fields to the store. Called while
+        holding ``self._lock`` so the in-memory record and its persisted row
+        never visibly diverge to a concurrent reader. A no-op when no store
+        is attached (e.g. most unit tests)."""
+        if self._store is None:
+            return
+        self._store.upsert(
+            ui_run_id=record.run_id,
+            name=record.name,
+            goal_text=record.goal_text,
+            dataset_name=record.dataset_name,
+            status=record.status,
+            created_at=record.created_at,
+            result_run_id=record.result_run_id,
+            final_report_id=record.final_report_id,
+            error=record.error,
+            llm_cost_usd=record.llm_cost_usd,
+            stages=record.stages,
+        )
 
     # -- lifecycle --------------------------------------------------------------
 
@@ -80,6 +160,7 @@ class RunRegistry:
             )
             self._runs[run_id] = record
             self._subscribers[run_id] = []
+            self._persist(record)
             return record
 
     def get(self, run_id: str) -> RunRecord | None:
@@ -92,6 +173,7 @@ class RunRegistry:
             if record is None:
                 return False
             record.name = name
+            self._persist(record)
             return True
 
     def list_runs(self) -> list[RunRecord]:
@@ -102,7 +184,9 @@ class RunRegistry:
 
     def cancel(self, run_id: str) -> bool:
         """Signal a run to stop gracefully. The background thread checks this
-        flag periodically and exits early, transitioning the run to CANCELLED."""
+        flag periodically and exits early, transitioning the run to CANCELLED.
+        Not persisted (see class docstring): a restart already fails any
+        run still active, making a separate cancelled flag moot."""
         with self._lock:
             record = self._runs.get(run_id)
             if record is None:
@@ -148,6 +232,8 @@ class RunRegistry:
                 with contextlib.suppress(queue.Full):
                     q.put_nowait(StreamEvent(type="done", data={"status": "deleted"}))
             del self._runs[run_id]
+            if self._store is not None:
+                self._store.delete(run_id)
             return True
 
     # -- publishing -------------------------------------------------------------
@@ -162,11 +248,28 @@ class RunRegistry:
         with self._lock:
             record = self._runs[run_id]
             record.status = status
+            self._persist(record)
             self._publish(run_id, StreamEvent(type="status", data={"status": status.value}))
 
     def set_cost(self, run_id: str, cost_usd: float) -> None:
         with self._lock:
-            self._runs[run_id].llm_cost_usd = round(cost_usd, 6)
+            record = self._runs[run_id]
+            record.llm_cost_usd = round(cost_usd, 6)
+            self._persist(record)
+
+    def set_result_run_id(self, run_id: str, result_run_id: str) -> None:
+        """Record the mlteam pipeline's own run id once ``run_manager``
+        learns it (only knowable after the pipeline call returns -- see
+        run_manager.py). Replaces the previous direct
+        ``record.result_run_id = ...`` mutation in run_manager.py/demo.py,
+        which silently bypassed persistence entirely; every other field
+        mutation goes through a registry method for exactly this reason."""
+        with self._lock:
+            record = self._runs.get(run_id)
+            if record is None:
+                return
+            record.result_run_id = result_run_id
+            self._persist(record)
 
     def update_stage(
         self,
@@ -175,6 +278,16 @@ class RunRegistry:
         status: StageStatus,
         detail: str = "",
     ) -> None:
+        """Deliberately NOT persisted on every call: this fires many times
+        per run (once per agent-flow node transition) and a stage snapshot
+        mid-run is only meaningful while the run's own thread is alive to
+        keep advancing it. A run interrupted by a restart is marked FAILED
+        on reload (see ``load_from_store``) regardless of which stage it
+        reached, so persisting every transition would be write volume spent
+        on state that gets overwritten as FAILED the moment it would ever
+        be read back. ``finish``/``open_gate``/``resolve_gate`` persist the
+        stage list at the points a restart would actually want to recover
+        an accurate history up to."""
         with self._lock:
             record = self._runs[run_id]
             for state in record.stages:
@@ -210,6 +323,7 @@ class RunRegistry:
             record.status = status
             record.final_report_id = final_report_id
             record.error = error
+            self._persist(record)
         self._publish(run_id, StreamEvent(type="status", data={"status": status.value}))
         self._publish(run_id, StreamEvent(type="done", data={"status": status.value}))
 
@@ -226,6 +340,7 @@ class RunRegistry:
                 if state.stage is stage:
                     state.status = StageStatus.AWAITING_APPROVAL
                     break
+            self._persist(record)
         self._publish(
             run_id,
             StreamEvent(
@@ -261,6 +376,7 @@ class RunRegistry:
                     state.status = new_status
                     state.ended_at = utcnow()
                     break
+            self._persist(record)
         request.event.set()
         self.log(
             run_id,

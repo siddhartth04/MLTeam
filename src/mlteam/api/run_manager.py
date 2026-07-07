@@ -345,9 +345,7 @@ def _execute(
 
         _record_ledger_outcome(store, spec=spec, pipeline=pipeline, best_model=best_model)
 
-        record = registry.get(ui_run_id)
-        if record is not None:
-            record.result_run_id = result.initial.run_id
+        registry.set_result_run_id(ui_run_id, result.initial.run_id)
         registry.finish(
             ui_run_id, status=RunStatus.COMPLETED, final_report_id=report.meta.artifact_id
         )

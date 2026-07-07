@@ -214,9 +214,7 @@ def seed_demo_run(
 
         _record_ledger_outcome(store, spec=spec, pipeline=pipeline, best_model=result.best_model)
 
-        record = registry.get(DEMO_UI_RUN_ID)
-        if record is not None:
-            record.result_run_id = result.initial.run_id
+        registry.set_result_run_id(DEMO_UI_RUN_ID, result.initial.run_id)
         registry.finish(
             DEMO_UI_RUN_ID,
             status=RunStatus.COMPLETED,

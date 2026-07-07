@@ -259,7 +259,12 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
 
     @app.get("/api/runs/{ui_run_id}/artifacts")
     def run_artifacts(ui_run_id: str, type: str | None = None) -> list[dict[str, Any]]:
+        # 404s on an unknown ui_run_id; None here means "known run, pipeline
+        # hasn't started yet" -- that run has produced zero artifacts, not
+        # "every artifact in the store" (the bug this scoping fixes).
         result_run_id = _result_run_id(ui_run_id)
+        if result_run_id is None:
+            return []
         return list_artifacts(_store(settings), run_id=result_run_id, artifact_type=type)
 
     @app.get("/api/artifacts/{artifact_id}")
@@ -271,12 +276,21 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
 
     @app.get("/api/runs/{ui_run_id}/lineage")
     def run_lineage(ui_run_id: str) -> dict[str, Any]:
-        return lineage_graph(_store(settings), run_id=_result_run_id(ui_run_id))
+        # Same distinction as /artifacts: 404 for an unknown run, an explicit
+        # empty+pending graph (never a whole-store scan) for one still in
+        # flight.
+        result_run_id = _result_run_id(ui_run_id)
+        if result_run_id is None:
+            return {"nodes": [], "edges": [], "pending": True}
+        return lineage_graph(_store(settings), run_id=result_run_id)
 
     # -- experiments, spec, critique, explain ----------------------------------
 
     @app.get("/api/runs/{ui_run_id}/experiments")
     def experiments(ui_run_id: str) -> list[dict[str, Any]]:
+        # _result_run_id 404s on an unknown ui_run_id; None means "known run,
+        # not yet resolved to a pipeline id" -- that run has no experiments
+        # yet, which is [] , not a store-wide fallback.
         rid = _result_run_id(ui_run_id)
         return experiments_view(_store(settings), rid) if rid else []
 
@@ -303,9 +317,11 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
 
         from mlteam.agents.deployer import evidently_drift_report, summarize_drift_report
 
+        # _result_run_id already 404s for an unknown ui_run_id; a None here
+        # can only mean a known run that hasn't resolved a pipeline id yet.
         rid = _result_run_id(ui_run_id)
         if rid is None:
-            raise HTTPException(404, "run not found or not yet completed")
+            raise HTTPException(404, "run not yet completed")
         bundle = deployment_bundle_for_run(_store(settings), rid)
         if bundle is None:
             raise HTTPException(404, "run has no deployment bundle (Gate 3 not yet reached)")
@@ -403,8 +419,15 @@ def _select_transport(demo: bool, settings: APISettings) -> tuple[Any, str]:
 
 
 def _result_run_id(ui_run_id: str) -> str | None:
+    """The pipeline run id for a KNOWN ui run, or None while it's still in
+    flight. Raises HTTPException(404) for an unknown ui run id -- callers
+    must not treat "unknown run" and "run hasn't produced a pipeline id yet"
+    as the same case, since the former has no data to scope by run_id at all
+    and the latter legitimately has none yet."""
     record = REGISTRY.get(ui_run_id)
-    return record.result_run_id if record else None
+    if record is None:
+        raise HTTPException(404, "run not found")
+    return record.result_run_id
 
 
 async def _sse(ui_run_id: str) -> AsyncIterator[str]:

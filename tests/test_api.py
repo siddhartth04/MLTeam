@@ -144,6 +144,81 @@ def test_full_run_completes_and_populates_api(client, tmp_path):
     )
 
 
+def test_artifacts_404_for_unknown_run(client):
+    """Regression test for the whole-store leak: /artifacts used to resolve
+    an unknown run's pipeline id as None, and list_artifacts(run_id=None)
+    meant "no filter" -- returning every artifact from every run ever
+    stored. An unknown ui_run_id must 404, not silently succeed with
+    unrelated data."""
+    api, _, _ = client
+    resp = api.get("/api/runs/ghost-run-does-not-exist/artifacts")
+    assert resp.status_code == 404
+
+
+def test_lineage_404_for_unknown_run(client):
+    api, _, _ = client
+    resp = api.get("/api/runs/ghost-run-does-not-exist/lineage")
+    assert resp.status_code == 404
+
+
+def test_experiments_404_for_unknown_run(client):
+    api, _, _ = client
+    resp = api.get("/api/runs/ghost-run-does-not-exist/experiments")
+    assert resp.status_code == 404
+
+
+def test_artifacts_empty_for_in_flight_run_not_whole_store(client, tmp_path):
+    """A run that is registered but hasn't resolved a pipeline run id yet
+    (still queued/running) must see an empty artifact list of its OWN -- not
+    the artifacts of some unrelated, already-completed run sharing the same
+    store."""
+    api, reg, _ = client
+
+    # A genuinely completed run populates the store with real artifacts.
+    completed_ui_run_id = _launch((api, reg, _), tmp_path)
+    _wait_for_completion(reg, completed_ui_run_id)
+    other_run_artifacts = api.get(f"/api/runs/{completed_ui_run_id}/artifacts").json()
+    assert len(other_run_artifacts) > 0  # sanity: the store is non-empty
+
+    # A second run registered but never started has no result_run_id yet.
+    reg.create("in-flight-run", goal_text="predict something", dataset_name="d.csv")
+    resp = api.get("/api/runs/in-flight-run/artifacts")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_lineage_pending_for_in_flight_run_not_whole_store(client, tmp_path):
+    api, reg, _ = client
+
+    completed_ui_run_id = _launch((api, reg, _), tmp_path)
+    _wait_for_completion(reg, completed_ui_run_id)
+    other_lineage = api.get(f"/api/runs/{completed_ui_run_id}/lineage").json()
+    assert len(other_lineage["nodes"]) > 0  # sanity: the store is non-empty
+
+    reg.create("in-flight-run", goal_text="predict something", dataset_name="d.csv")
+    resp = api.get("/api/runs/in-flight-run/lineage")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"nodes": [], "edges": [], "pending": True}
+
+
+def test_completed_run_lineage_and_artifacts_remain_scoped(client, tmp_path):
+    """A completed run's own listing must still show only its own artifacts
+    -- the fix for the unscoped fallback must not regress normal scoping."""
+    api, reg, _ = client
+    ui_run_id = _launch((api, reg, _), tmp_path)
+    _wait_for_completion(reg, ui_run_id)
+
+    result_run_id = reg.get(ui_run_id).result_run_id
+    artifacts = api.get(f"/api/runs/{ui_run_id}/artifacts").json()
+    assert len(artifacts) > 0
+    assert all(a["run_id"] == result_run_id for a in artifacts)
+
+    lineage = api.get(f"/api/runs/{ui_run_id}/lineage").json()
+    assert len(lineage["nodes"]) > 0
+    assert "pending" not in lineage
+
+
 def test_holdout_artifact_is_protected_in_api(client, tmp_path):
     api, reg, _ = client
     ui_run_id = _launch(client, tmp_path)

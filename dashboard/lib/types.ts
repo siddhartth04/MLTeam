@@ -83,6 +83,10 @@ export interface LineageEdge {
 export interface LineageGraph {
   nodes: LineageNode[];
   edges: LineageEdge[];
+  // Present (true) only when the run is registered but hasn't resolved a
+  // pipeline run id yet -- an empty graph here means "not started", not
+  // "this run truly has zero artifacts".
+  pending?: boolean;
 }
 
 export interface ArtifactDetail {

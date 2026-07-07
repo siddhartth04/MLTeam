@@ -37,18 +37,41 @@ def artifact_summary(record: LineageRecord) -> dict[str, Any]:
 
 
 def list_artifacts(
-    store: GuardedArtifactStore, *, run_id: str | None = None, artifact_type: str | None = None
+    store: GuardedArtifactStore, *, run_id: str, artifact_type: str | None = None
 ) -> list[dict[str, Any]]:
-    scoped = store.artifact_ids_for_run(run_id) if run_id is not None else None
+    """Artifacts scoped to a single pipeline run.
+
+    ``run_id`` is required (not Optional) on purpose: a ``None`` here used to
+    mean "no filter", so an API route with an unresolved pipeline run id (a
+    run still in flight, or an unknown ui id) would silently return every
+    artifact in the store across every run ever recorded. Callers that
+    genuinely want a whole-store listing must use ``list_all_artifacts``, so
+    that intent is explicit at the call site instead of an accidental default.
+    """
+    scoped = store.artifact_ids_for_run(run_id)
     ids = store.list_ids(artifact_type)
     records = [store._inner.lineage.get_record(aid) for aid in ids]
     out = []
     for record in records:
         if record is None:
             continue
-        if run_id is not None and not store.is_in_run(record.artifact_id, run_id, scoped):
+        if not store.is_in_run(record.artifact_id, run_id, scoped):
             continue
         out.append(artifact_summary(record))
+    out.sort(key=lambda a: a["created_at"])
+    return out
+
+
+def list_all_artifacts(
+    store: GuardedArtifactStore, *, artifact_type: str | None = None
+) -> list[dict[str, Any]]:
+    """Every artifact in the store, unscoped by run. Not wired to any API
+    route -- exists so a deliberate whole-store listing is a distinct,
+    explicitly-named call rather than the (former) default behavior of
+    ``list_artifacts`` when it's handed a ``None`` run id."""
+    ids = store.list_ids(artifact_type)
+    records = [store._inner.lineage.get_record(aid) for aid in ids]
+    out = [artifact_summary(record) for record in records if record is not None]
     out.sort(key=lambda a: a["created_at"])
     return out
 
@@ -73,10 +96,16 @@ def artifact_detail(store: GuardedArtifactStore, artifact_id: str) -> dict[str, 
     return summary
 
 
-def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dict[str, Any]:
-    """Nodes + edges for the artifact-lineage explorer."""
+def lineage_graph(store: GuardedArtifactStore, run_id: str) -> dict[str, Any]:
+    """Nodes + edges for the artifact-lineage explorer, scoped to one run.
+
+    ``run_id`` is required for the same reason as ``list_artifacts``: a
+    ``None`` default previously meant "show the whole store", which silently
+    mixed unrelated runs' artifacts into a single graph whenever the caller's
+    run id hadn't resolved yet.
+    """
     lineage = store._inner.lineage
-    scoped = store.artifact_ids_for_run(run_id) if run_id is not None else None
+    scoped = store.artifact_ids_for_run(run_id)
     ids = store.list_ids()
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
@@ -84,7 +113,7 @@ def lineage_graph(store: GuardedArtifactStore, run_id: str | None = None) -> dic
         record = lineage.get_record(aid)
         if record is None:
             continue
-        if run_id is not None and not store.is_in_run(aid, run_id, scoped):
+        if not store.is_in_run(aid, run_id, scoped):
             continue
         nodes.append(
             {

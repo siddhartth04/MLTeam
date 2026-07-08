@@ -348,7 +348,13 @@ def run_agentic_pipeline(
     # -- LLM cleaning proposal (deterministic fallback, loudly) ---------------
     reporter.stage("clean", "active")
     try:
-        ops = propose_cleaning_ops_llm(client, train_profile, target_column=spec.target_column)
+        ops = propose_cleaning_ops_llm(
+            client,
+            train_profile,
+            target_column=spec.target_column,
+            store_root=store.root,
+            task_type=spec.task_type,
+        )
     except LLMValidationError as exc:
         _log.warning("cleaning_proposer_fallback", error=str(exc))
         reporter.log(f"Cleaning proposer fell back to deterministic ops: {exc}", level="warning")

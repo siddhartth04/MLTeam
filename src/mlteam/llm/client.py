@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from mlteam.contracts import TraceEventType
 from mlteam.llm.pricing import TokenUsage, estimate_cost_usd
 from mlteam.llm.schema import output_schema_for
-from mlteam.llm.transport import LLMRequest, Transport
+from mlteam.llm.transport import FixtureTransport, LLMRequest, Transport
 from mlteam.observability.tracing import TraceWriter
 
 _log = structlog.get_logger(__name__)
@@ -84,6 +84,14 @@ class LLMClient:
     @property
     def total_usage(self) -> TokenUsage:
         return self._total_usage
+
+    @property
+    def is_live(self) -> bool:
+        """False for FixtureTransport (recorded/replayed runs, incl. the
+        demo seed and every test) -- used to gate side effects that should
+        only accumulate from real usage: the outcome ledger, and (Task 7)
+        the lessons substrate. A fixture replay is not a new data point."""
+        return not isinstance(self._transport, FixtureTransport)
 
     def structured(
         self,

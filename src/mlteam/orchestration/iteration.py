@@ -18,6 +18,7 @@ import structlog
 from mlteam.agents.critic import critique_evaluation
 from mlteam.agents.experiment_planner import revise_experiment_plan
 from mlteam.agents.hpo import SEARCH_SPACES, SearchSpace, tune_experiment
+from mlteam.agents.retro import run_retro
 from mlteam.agents.trainer import TrainResult, compute_env_hash
 from mlteam.contracts import (
     CritiqueReport,
@@ -360,6 +361,21 @@ def run_iterative_pipeline(
             _log.info("iteration_stopped_by_model", index=iteration, reason=stop_reason)
             reporter.stage("iterate", "done", detail=stop_reason)
             break
+
+    # Post-run retro (JUDGMENT_ROADMAP.md Task 7): best-effort, both approve
+    # and halt get one -- halts teach more. Never raises (see agents/retro.py).
+    triage_remedies = ()
+    if initial.pipeline.triage_report_id is not None:
+        triage_remedies = store.get(initial.pipeline.triage_report_id).remedies
+    run_retro(
+        client,
+        store.root,
+        run_id=run_id,
+        task_type=spec.task_type,
+        critique=critique,
+        outcomes=list_experiment_outcomes(store, run_id),
+        triage_remedies=triage_remedies,
+    )
 
     final_best = _best_key(results, primary, dummy_key)
     return IterativeResult(

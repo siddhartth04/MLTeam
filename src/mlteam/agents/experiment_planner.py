@@ -30,9 +30,12 @@ from mlteam.llm.client import LLMClient
 from mlteam.llm.summaries import profile_summary
 from mlteam.store.interface import ArtifactStore
 from mlteam.store.ledger import matching_priors
+from mlteam.store.lessons import matching_lessons
 from mlteam.templates.registry import get_template, list_templates
 
 _log = structlog.get_logger(__name__)
+# JUDGMENT_ROADMAP.md Task 7: matches ledger.matching_priors' own default.
+_LESSONS_TOP_K = 5
 
 SYSTEM_PROMPT = """You are the Experiment Planner of an autonomous ML engineering \
 team. Select which vetted pipeline templates to train and with what config.
@@ -108,6 +111,13 @@ instruments, not competitors:
   the screening run outright (zero extra training cost) — this is a reason to \
   prefer the vetted default config for those two slots unless the profile clearly \
   demands otherwise.
+- lessons_from_previous_runs, when present, are distilled propositions from past \
+runs on this store with the SAME task_type (e.g. "log-transform price-like \
+targets spanning multiple orders of magnitude") — weigh them, don't blindly \
+obey: they are not this run's evidence, and every experiment you plan still \
+needs its own justification grounded in THIS profile/screening_results, not \
+just a cited lesson. A lesson may inform target_transform or config choices; \
+it never overrides the baselines-first/coverage rules above.
 Return only JSON matching the schema."""
 
 # Rough wall-time heuristics (seconds) per 1k rows, by template.
@@ -494,6 +504,11 @@ def plan_experiments(
         if store_root is not None
         else []
     )
+    lessons = (
+        matching_lessons(store_root, task_type=problem.task_type.value, max_entries=_LESSONS_TOP_K)
+        if store_root is not None
+        else []
+    )
 
     result = client.structured(
         agent="experiment-planner",
@@ -516,6 +531,9 @@ def plan_experiments(
                 for p in priors
             ],
             "screening_results": screening_results or [],
+            "lessons_from_previous_runs": [
+                {"lesson": entry["lesson"], "evidence": entry["evidence"]} for entry in lessons
+            ],
         },
         schema=ExperimentPlanDraft,
         post_validate=_post_validate,

@@ -12,6 +12,7 @@ Only structural, non-learned ops are applied at the dataset level.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -27,16 +28,22 @@ from mlteam.contracts import (
     DataProfile,
     DatasetRole,
     DatasetVersion,
+    TaskType,
     WarningCode,
     new_artifact,
 )
 from mlteam.llm.client import LLMClient
 from mlteam.llm.summaries import profile_summary
 from mlteam.store.interface import ArtifactStore
+from mlteam.store.lessons import matching_lessons
 
 _log = structlog.get_logger(__name__)
 
 _MISSING_TOKENS = ("", "na", "n/a", "null", "none", "nan", "?")
+# JUDGMENT_ROADMAP.md Task 7: how many of the most recent matching-task-type
+# lessons to surface -- a prior, not a rule; matches ledger.matching_priors'
+# own default so the two "up to 5 past data points" prompts read consistently.
+_LESSONS_TOP_K = 5
 
 # Ops the deterministic dataset-level executor can apply today. Learned
 # transforms (imputation, clipping) are deliberately excluded — they belong
@@ -105,6 +112,10 @@ forbidden here — they are fit inside cross-validation pipelines later.
 leaks. Never drop the target column.
 - Every op needs a specific, factual justification grounded in the profile.
 - Propose the minimal set of ops; an empty list is valid if the data is clean.
+- lessons_from_previous_runs, when present, are distilled propositions from past \
+runs on this store with the SAME task_type -- weigh them, don't blindly obey: \
+they may not apply to this specific profile, and every op you propose still \
+needs its own justification grounded in THIS profile, not just a cited lesson.
 Return only JSON matching the schema."""
 
 
@@ -139,8 +150,15 @@ def propose_cleaning_ops_llm(
     profile: DataProfile,
     *,
     target_column: str | None,
+    store_root: Path | None = None,
+    task_type: TaskType | None = None,
 ) -> tuple[CleaningOp, ...]:
-    """LLM proposes ops from the whitelist; deterministic checks gate them."""
+    """LLM proposes ops from the whitelist; deterministic checks gate them.
+
+    ``store_root``/``task_type``, when both given, surface up to
+    ``_LESSONS_TOP_K`` most recent lessons.jsonl entries matching this
+    task_type (JUDGMENT_ROADMAP.md Task 7) in the prompt payload.
+    """
 
     def _post_validate(draft: CleaningOpsDraft) -> None:
         for op in draft.ops:
@@ -160,10 +178,21 @@ def propose_cleaning_ops_llm(
             if op.op_type is CleaningOpType.STANDARDIZE_MISSING_TOKENS and not op.columns:
                 raise ValueError("standardize_missing_tokens requires 'columns'")
 
+    lessons = (
+        matching_lessons(store_root, task_type=task_type.value, max_entries=_LESSONS_TOP_K)
+        if store_root is not None and task_type is not None
+        else []
+    )
     result = client.structured(
         agent="cleaning-proposer",
         system_prompt=CLEANING_PROPOSER_PROMPT,
-        user_payload={"profile": profile_summary(profile), "target_column": target_column},
+        user_payload={
+            "profile": profile_summary(profile),
+            "target_column": target_column,
+            "lessons_from_previous_runs": [
+                {"lesson": entry["lesson"], "evidence": entry["evidence"]} for entry in lessons
+            ],
+        },
         schema=CleaningOpsDraft,
         post_validate=_post_validate,
     )

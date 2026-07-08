@@ -25,6 +25,7 @@ from mlteam.contracts import (
     ExplainabilityReport,
     ProblemSpec,
     TrainedModel,
+    Verdict,
     new_artifact,
 )
 from mlteam.evaluation.field_checks import (
@@ -254,23 +255,35 @@ def build_deployment_bundle(
         planned_experiment_ids=planned_experiment_ids,
     )
 
-    require_approval(
-        gate,
-        GateName.DEPLOYMENT,
-        {
-            "model_experiment_id": model.experiment_id,
-            "template_id": model.template_id,
-            "task_type": problem.task_type.value,
-            "served_features": [c["name"] for c in schema_spec["columns"]],
-            "artifacts": {
-                "inference_schema_blob": schema_blob,
-                "app_blob": app_blob,
-                "dockerfile_blob": dockerfile_blob,
-                "drift_baseline_blob": drift_blob,
-            },
-            "dossier": dossier,
+    summary: dict[str, Any] = {
+        "model_experiment_id": model.experiment_id,
+        "template_id": model.template_id,
+        "task_type": problem.task_type.value,
+        "served_features": [c["name"] for c in schema_spec["columns"]],
+        "artifacts": {
+            "inference_schema_blob": schema_blob,
+            "app_blob": app_blob,
+            "dockerfile_blob": dockerfile_blob,
+            "drift_baseline_blob": drift_blob,
         },
-    )
+        "dossier": dossier,
+    }
+    # A halted critique reaching this point means run_manager deliberately
+    # overrode the default block on deploying a halted model (see
+    # JUDGMENT_ROADMAP.md Task 0) -- the verdict is already buried inside
+    # dossier["critique"]["verdict"], but a human approving Gate 3 must not
+    # have to go looking for it. Top-level, unmissable keys, not a nested
+    # field the reviewer has to know to check.
+    if critique is not None and critique.verdict is Verdict.HALT:
+        summary["critic_verdict"] = Verdict.HALT.value
+        summary["warning"] = (
+            "The Critic HALTED this run -- it found the model unfit to ship. "
+            "You are being asked to approve deployment anyway because the "
+            "halt-block override is enabled. Review the critique findings in "
+            "the dossier below before approving."
+        )
+
+    require_approval(gate, GateName.DEPLOYMENT, summary)
 
     bundle = new_artifact(
         DeploymentBundle,

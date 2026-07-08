@@ -17,7 +17,7 @@ import structlog
 
 from mlteam.api.events import LogEvent, RunStatus, Stage, StageStatus
 from mlteam.api.registry import REGISTRY, RunRegistry
-from mlteam.contracts import ProblemSpec, TrainedModel
+from mlteam.contracts import ProblemSpec, TrainedModel, Verdict
 from mlteam.llm.client import LLMClient
 from mlteam.llm.transport import Transport
 from mlteam.orchestration.gates import ApprovalGate, GateDecision, GateName, GateRejectedError
@@ -145,6 +145,7 @@ def launch_run(
     hpo_trials: int = 8,
     max_iterations: int = 2,
     max_llm_cost_usd: float = 5.0,
+    allow_deploy_on_halt: bool = False,
     name: str = "",
     registry: RunRegistry = REGISTRY,
 ) -> threading.Thread:
@@ -164,6 +165,7 @@ def launch_run(
             hpo_trials=hpo_trials,
             max_iterations=max_iterations,
             max_llm_cost_usd=max_llm_cost_usd,
+            allow_deploy_on_halt=allow_deploy_on_halt,
             registry=registry,
         ),
         daemon=True,
@@ -186,6 +188,7 @@ def _execute(
     hpo_trials: int,
     max_iterations: int,
     max_llm_cost_usd: float,
+    allow_deploy_on_halt: bool = False,
     registry: RunRegistry,
 ) -> None:
     # Imported here to keep module import light and avoid heavy deps at import.
@@ -288,36 +291,55 @@ def _execute(
 
         # Deployment bundle (Gate 3 via the dashboard).
         stage(Stage.DEPLOY, StageStatus.ACTIVE)
-        from mlteam.agents import read_dataset
-        from mlteam.evaluation.results import list_experiment_outcomes
 
-        features = [
-            c
-            for c in read_dataset(store, store.get(pipeline.modeling_dataset_id)).columns
-            if c != spec.target_column
-        ]
-        try:
-            build_deployment_bundle(
-                store,
-                model=best_model,
-                profile=store.get(pipeline.train_profile_id),
-                problem=spec,
-                train_dataset_id=pipeline.modeling_dataset_id,
-                feature_names=features,
-                gate=gate,
-                run_id=result.initial.run_id,
-                split_plan_id=pipeline.split_plan_id,
-                outcomes=list_experiment_outcomes(store, result.initial.run_id),
-                evaluation=result.final_report,
-                explainability=explain_report,
-                critique=result.final_critique,
-                planned_experiment_ids=_planned_experiment_ids(store, pipeline),
+        halted = result.final_critique.verdict is Verdict.HALT
+        if halted and not allow_deploy_on_halt:
+            # The Critic found this model unfit to ship -- offering a human
+            # a deployment sign-off anyway would make Gate 3 a rubber stamp
+            # rather than a real decision point (observed live 2026-07-08:
+            # halt at 16:32, Gate 3 approved at 16:40, for a model whose
+            # every candidate had negative R²). Skip the bundle entirely
+            # rather than build one and hope a human notices the buried
+            # verdict. allow_deploy_on_halt is the explicit, logged escape
+            # hatch for a human who has already decided to ship anyway.
+            stage(Stage.DEPLOY, StageStatus.SKIPPED, "blocked: critic verdict halt")
+            note(
+                "Deployment blocked: Critic verdict is HALT. Set "
+                "MLTEAM_API_ALLOW_DEPLOY_ON_HALT=true to override.",
+                level="warning",
+                s=Stage.DEPLOY,
             )
-            stage(Stage.DEPLOY, StageStatus.DONE)
-            note("Deployment bundle signed off", level="success", s=Stage.DEPLOY)
-        except GateRejectedError:
-            stage(Stage.DEPLOY, StageStatus.SKIPPED, "deployment declined")
-            note("Deployment declined at Gate 3", level="warning", s=Stage.GATE_DEPLOY)
+        else:
+            from mlteam.agents import read_dataset
+            from mlteam.evaluation.results import list_experiment_outcomes
+
+            features = [
+                c
+                for c in read_dataset(store, store.get(pipeline.modeling_dataset_id)).columns
+                if c != spec.target_column
+            ]
+            try:
+                build_deployment_bundle(
+                    store,
+                    model=best_model,
+                    profile=store.get(pipeline.train_profile_id),
+                    problem=spec,
+                    train_dataset_id=pipeline.modeling_dataset_id,
+                    feature_names=features,
+                    gate=gate,
+                    run_id=result.initial.run_id,
+                    split_plan_id=pipeline.split_plan_id,
+                    outcomes=list_experiment_outcomes(store, result.initial.run_id),
+                    evaluation=result.final_report,
+                    explainability=explain_report,
+                    critique=result.final_critique,
+                    planned_experiment_ids=_planned_experiment_ids(store, pipeline),
+                )
+                stage(Stage.DEPLOY, StageStatus.DONE)
+                note("Deployment bundle signed off", level="success", s=Stage.DEPLOY)
+            except GateRejectedError:
+                stage(Stage.DEPLOY, StageStatus.SKIPPED, "deployment declined")
+                note("Deployment declined at Gate 3", level="warning", s=Stage.GATE_DEPLOY)
 
         # Final report.
         stage(Stage.REPORT, StageStatus.ACTIVE)

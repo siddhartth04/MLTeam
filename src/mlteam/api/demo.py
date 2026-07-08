@@ -13,6 +13,7 @@ import structlog
 
 from mlteam.api.events import LogEvent, RunStatus, Stage, StageStatus
 from mlteam.api.registry import REGISTRY, RunRegistry
+from mlteam.contracts import Verdict
 from mlteam.llm import FixtureTransport, LLMClient
 
 _log = structlog.get_logger(__name__)
@@ -158,23 +159,32 @@ def seed_demo_run(
         stage(Stage.DEPLOY, StageStatus.ACTIVE)
         from mlteam.api.run_manager import _planned_experiment_ids
 
-        build_deployment_bundle(
-            store,
-            model=result.best_model,
-            profile=store.get(pipeline.train_profile_id),
-            problem=spec,
-            train_dataset_id=pipeline.modeling_dataset_id,
-            feature_names=features,
-            gate=AutoApproveGate(),
-            run_id=result.initial.run_id,
-            split_plan_id=pipeline.split_plan_id,
-            outcomes=list_experiment_outcomes(store, result.initial.run_id),
-            evaluation=result.final_report,
-            explainability=explain_report,
-            critique=result.final_critique,
-            planned_experiment_ids=_planned_experiment_ids(store, pipeline),
-        )
-        stage(Stage.DEPLOY, StageStatus.DONE)
+        # Mirrors run_manager._execute's halt-block (JUDGMENT_ROADMAP.md
+        # Task 0): the demo fixture always approves, so this branch is not
+        # exercised today, but the demo pipeline must not silently diverge
+        # from the real launch path's safety behavior if the fixture ever
+        # changes.
+        if result.final_critique.verdict is Verdict.HALT:
+            stage(Stage.DEPLOY, StageStatus.SKIPPED, "blocked: critic verdict halt")
+            note("Deployment blocked: Critic verdict is HALT.", "warning", Stage.DEPLOY)
+        else:
+            build_deployment_bundle(
+                store,
+                model=result.best_model,
+                profile=store.get(pipeline.train_profile_id),
+                problem=spec,
+                train_dataset_id=pipeline.modeling_dataset_id,
+                feature_names=features,
+                gate=AutoApproveGate(),
+                run_id=result.initial.run_id,
+                split_plan_id=pipeline.split_plan_id,
+                outcomes=list_experiment_outcomes(store, result.initial.run_id),
+                evaluation=result.final_report,
+                explainability=explain_report,
+                critique=result.final_critique,
+                planned_experiment_ids=_planned_experiment_ids(store, pipeline),
+            )
+            stage(Stage.DEPLOY, StageStatus.DONE)
 
         stage(Stage.REPORT, StageStatus.ACTIVE)
         report = build_final_report(

@@ -242,6 +242,7 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
             hpo_trials=settings.hpo_trials,
             max_iterations=settings.max_iterations,
             max_llm_cost_usd=settings.max_llm_cost_usd,
+            allow_deploy_on_halt=settings.allow_deploy_on_halt,
             name=name,
         )
         return {"ui_run_id": ui_run_id}

@@ -2,12 +2,12 @@
 
 Each test drives the REAL deterministic pipeline (run_tabular_pipeline)
 against one benchmarks/judgment_traps.py generator and asserts the single
-senior-engineer call that trap is designed to demand. The five must-pass
-traps assert the call is made TODAY; the two blocked traps are marked
-xfail(strict=True) and keyed to the roadmap task that closes them -- when
-that task lands, its trap's assertion starts passing and strict=True turns
-the leftover xfail marker into a hard error, forcing the marker's removal
-in the same commit.
+senior-engineer call that trap is designed to demand. Six of eight traps
+assert the call is made TODAY; the remaining blocked trap is marked
+xfail(strict=True) and keyed to the roadmap task that closes it -- when
+that task lands, its assertion starts passing and strict=True turns the
+leftover xfail marker into a hard error, forcing the marker's removal in
+the same commit.
 
 temporal_drift_disguised has no task assigned (see JUDGMENT_ROADMAP.md's
 deferred section) but is still asserted here in its intended, currently-
@@ -193,21 +193,13 @@ def test_placeholder_labels_are_coerced_and_named(tmp_path):
     assert "Call for Price" in justifications
 
 
-# -- blocked traps (xfail, keyed to the roadmap task that closes them) --
-
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="blocked by JUDGMENT_ROADMAP.md Task 5 (cross-fitted target encoding)",
-)
 def test_high_cardinality_categorical_beats_the_dummy_baseline(tmp_path):
-    """Calibration: today's best real model (whatever encoding it falls
-    back to for a 150-level categorical) scores roc_auc 0.34-0.41 --
-    WORSE than the 0.5 dummy/majority-class baseline from the SAME run,
-    despite the column carrying real signal by construction. Cross-fitted
-    target encoding (Task 5) must make the real model beat its own dummy
-    baseline; comparing within one run needs no separate calibration run."""
+    """JUDGMENT_ROADMAP.md Task 5 flips this trap: before cross-fitted
+    target encoding, the best real model (whatever encoding it fell back to
+    for a 150-level categorical) scored roc_auc 0.34-0.41 -- WORSE than the
+    0.5 dummy/majority-class baseline from the SAME run, despite the column
+    carrying real signal by construction. Comparing within one run needs no
+    separate calibration run."""
     _, result = _run(
         tmp_path,
         high_cardinality_categorical(),
@@ -223,6 +215,9 @@ def test_high_cardinality_categorical_beats_the_dummy_baseline(tmp_path):
         if key != "exp-dummy"
     )
     assert best_real_auc > dummy_auc
+
+
+# -- blocked traps (xfail, keyed to the roadmap task that closes them) --
 
 
 @pytest.mark.xfail(

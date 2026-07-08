@@ -140,7 +140,21 @@ def high_cardinality_categorical(
     per-level mean -- one-hot/ordinal encoding cannot usefully exploit 150
     sparse levels; only a fold-safe target/frequency encoding can. See
     tests/test_judgment_traps.py for how the pass threshold was calibrated
-    (with-column ceiling vs without-column floor)."""
+    (with-column ceiling vs without-column floor).
+
+    ``noise_feature`` is a real column, not just noise added to the logit --
+    without it, this frame is only 2 columns (category, binary target) with
+    ~27 rows/category, so most rows are EXACT duplicates of a same-category-
+    same-label row. Triage's (correct, independently-tested) dedup then
+    collapses ~4000 rows to ~240 unique (category, label) pairs before
+    training ever sees them, at which point ordinary small-sample noise --
+    a handful of the now-≤150 categories landing on a single label by pure
+    chance -- looks like strong signal to any encoder, confounding the
+    leakage-proof test this trap exists to support. A continuous per-row
+    noise column makes exact duplicates astronomically unlikely, so dedup
+    is a no-op here and the trap tests target encoding, not the interaction
+    between two unrelated triage steps.
+    """
     rng = np.random.default_rng(seed)
     level_effects = rng.normal(0, 2.0, n_levels)
     levels = rng.integers(0, n_levels, n)
@@ -150,6 +164,7 @@ def high_cardinality_categorical(
     return pl.DataFrame(
         {
             "high_card_category": [f"cat_{lv:04d}" for lv in levels],
+            "noise_feature": rng.normal(0, 1, n),
             "target": target,
         }
     )
@@ -233,7 +248,7 @@ TRAPS: tuple[TrapSpec, ...] = (
         target_column="target",
         task_type=TaskType.BINARY_CLASSIFICATION,
         expected="cross-fitted target/frequency encoding for a 150-level categorical",
-        blocked_by="Task 5",
+        blocked_by=None,  # closed by JUDGMENT_ROADMAP.md Task 5
     ),
     TrapSpec(
         name="temporal_drift_disguised",

@@ -24,7 +24,12 @@ from mlteam.contracts.model import TrainedModel
 from mlteam.evaluation.metrics import scoring_for, summarize_folds, to_natural_sign
 from mlteam.evaluation.results import TrainResult
 from mlteam.store.interface import ArtifactStore
-from mlteam.templates.registry import ColumnRoles, get_template, wrap_target_transform
+from mlteam.templates.registry import (
+    _TARGET_ENCODE_MIN_CARDINALITY,
+    ColumnRoles,
+    get_template,
+    wrap_target_transform,
+)
 
 _log = structlog.get_logger(__name__)
 
@@ -67,7 +72,17 @@ def _column_roles(df: object, target_column: str) -> ColumnRoles:
         if col == target_column:
             continue
         (numeric if df[col].dtype.is_numeric() else categorical).append(col)
-    return ColumnRoles(numeric=tuple(numeric), categorical=tuple(categorical))
+    # JUDGMENT_ROADMAP.md Task 5: computed here, where the frame is actually
+    # available, rather than adding a frame parameter to every template's
+    # build() callable (~17 call sites) for this one routing decision.
+    high_cardinality = tuple(
+        col for col in categorical if df[col].n_unique() > _TARGET_ENCODE_MIN_CARDINALITY
+    )
+    return ColumnRoles(
+        numeric=tuple(numeric),
+        categorical=tuple(categorical),
+        high_cardinality_categorical=high_cardinality,
+    )
 
 
 def _make_cv(task_type: TaskType, n_folds: int, seed: int) -> object:

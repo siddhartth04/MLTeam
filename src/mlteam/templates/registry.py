@@ -36,13 +36,32 @@ _ANOMALY_ONLY = frozenset({TaskType.ANOMALY_DETECTION})
 TABPFN_MAX_ROWS = 10_000
 TABPFN_MAX_FEATURES = 500
 
+# JUDGMENT_ROADMAP.md Task 5: below this, one-hot/ordinal is dense enough
+# and more interpretable (a human can read "category=X" off a one-hot
+# column; a target-encoded float column requires trusting the encoder).
+# Above it, one-hot blows up the feature space and ordinal imposes a fake
+# order across dozens/hundreds of unrelated levels -- cross-fitted target
+# encoding is the leakage-safe way to actually use that column's signal.
+_TARGET_ENCODE_MIN_CARDINALITY = 20
+
 
 @dataclass(frozen=True)
 class ColumnRoles:
-    """Feature columns split by how the preprocessor must treat them."""
+    """Feature columns split by how the preprocessor must treat them.
+
+    ``high_cardinality_categorical`` (JUDGMENT_ROADMAP.md Task 5) is a
+    SUBSET of ``categorical`` — the columns with cardinality above
+    ``_TARGET_ENCODE_MIN_CARDINALITY``, routed to cross-fitted
+    ``TargetEncoder`` instead of one-hot/ordinal in
+    ``build_preprocessor``/``build_scaled_preprocessor``. Computed once
+    where the frame is available (``agents/trainer.py::_column_roles``) so
+    the ``PipelineTemplate.build`` callable's signature never needs a frame
+    parameter.
+    """
 
     numeric: tuple[str, ...]
     categorical: tuple[str, ...]
+    high_cardinality_categorical: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -57,17 +76,69 @@ class PipelineTemplate:
         return task_type in self.task_types
 
 
+# Fixed, not threaded from the experiment seed: TargetEncoder's internal
+# cross-fitting needs a fixed splitter for run-to-run reproducibility (its
+# default internal CV is unseeded and non-deterministic across fits -- the
+# now-deprecated shuffle/random_state params it used to expose directly were
+# replaced in sklearn 1.9 by passing a CV splitter via `cv` instead).
+# Threading the real experiment seed through would require changing the
+# build() signature at every one of the ~17 template call sites for one
+# shared internal encoder step. A fixed seed still gives full determinism --
+# it just doesn't decorrelate this step's fold assignment across experiments
+# within the same run, which doesn't matter here (it never affects model
+# training, only this encoding step). Plain KFold (not StratifiedKFold)
+# regardless of task type: cross-fitting only needs valid, non-overlapping
+# train/test splits to prevent the classic target-encoding leak --
+# stratification is a variance-reduction nicety, not a correctness
+# requirement, and this keeps the encoder step task-type-agnostic like the
+# rest of build_preprocessor already is.
+_TARGET_ENCODER_SEED = 20260109
+
+
+def _split_categorical(roles: ColumnRoles) -> tuple[list[str], list[str]]:
+    """(low-cardinality, high-cardinality) categorical column names."""
+    high_card = set(roles.high_cardinality_categorical)
+    low = [c for c in roles.categorical if c not in high_card]
+    high = [c for c in roles.categorical if c in high_card]
+    return low, high
+
+
+def _target_encoded_step() -> Any:
+    from sklearn.impute import SimpleImputer
+    from sklearn.model_selection import KFold
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import TargetEncoder
+
+    return Pipeline(
+        [
+            ("impute", SimpleImputer(strategy="most_frequent")),
+            (
+                "encode",
+                TargetEncoder(
+                    target_type="auto",
+                    cv=KFold(n_splits=5, shuffle=True, random_state=_TARGET_ENCODER_SEED),
+                ),
+            ),
+        ]
+    )
+
+
 def build_preprocessor(roles: ColumnRoles) -> Any:
     """Impute + ordinal-encode inside the pipeline (leakage-safe by design).
 
     Right for tree ensembles (LightGBM/XGBoost/RF/...), which are scale-free
-    and split on ordinal codes without harm.
+    and split on ordinal codes without harm. Categorical columns above
+    ``_TARGET_ENCODE_MIN_CARDINALITY`` route to cross-fitted ``TargetEncoder``
+    instead (JUDGMENT_ROADMAP.md Task 5) — ordinal codes impose a fake order
+    across dozens/hundreds of unrelated levels that trees would otherwise
+    split on nonsensically.
     """
     from sklearn.compose import ColumnTransformer
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OrdinalEncoder
 
+    low_card, high_card = _split_categorical(roles)
     numeric = Pipeline([("impute", SimpleImputer(strategy="median"))])
     categorical = Pipeline(
         [
@@ -81,7 +152,8 @@ def build_preprocessor(roles: ColumnRoles) -> Any:
     return ColumnTransformer(
         [
             ("numeric", numeric, list(roles.numeric)),
-            ("categorical", categorical, list(roles.categorical)),
+            ("categorical", categorical, low_card),
+            ("target_encoded", _target_encoded_step(), high_card),
         ],
         remainder="drop",
     )
@@ -93,13 +165,16 @@ def build_scaled_preprocessor(roles: ColumnRoles) -> Any:
     Required by distance/margin/gradient models (linear, SVM, KNN, MLP,
     GaussianNB): ordinal codes would impose fake ordering and unscaled
     features would dominate distances. ``max_categories`` caps blow-up on
-    high-cardinality columns; unseen levels fold into the infrequent bucket.
+    remaining high-cardinality columns as a fallback; columns above
+    ``_TARGET_ENCODE_MIN_CARDINALITY`` route to cross-fitted ``TargetEncoder``
+    instead (JUDGMENT_ROADMAP.md Task 5), same as ``build_preprocessor``.
     """
     from sklearn.compose import ColumnTransformer
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+    low_card, high_card = _split_categorical(roles)
     numeric = Pipeline(
         [("impute", SimpleImputer(strategy="median")), ("scale", StandardScaler())]
     )
@@ -119,7 +194,8 @@ def build_scaled_preprocessor(roles: ColumnRoles) -> Any:
     return ColumnTransformer(
         [
             ("numeric", numeric, list(roles.numeric)),
-            ("categorical", categorical, list(roles.categorical)),
+            ("categorical", categorical, low_card),
+            ("target_encoded", _target_encoded_step(), high_card),
         ],
         remainder="drop",
     )

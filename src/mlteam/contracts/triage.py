@@ -24,6 +24,7 @@ from mlteam.contracts.base import Artifact, ArtifactRef
 class TriageIssueCode(StrEnum):
     TARGET_MISSING_ROWS = "target_missing_rows"
     TARGET_NOT_NUMERIC = "target_not_numeric"
+    TARGET_ZERO_VARIANCE = "target_zero_variance"
     NUMERIC_STRING_COLUMN = "numeric_string_column"
     TOO_FEW_LABELED_ROWS = "too_few_labeled_rows"
     DUPLICATE_ROWS = "duplicate_rows"

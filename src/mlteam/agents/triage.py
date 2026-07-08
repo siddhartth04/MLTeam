@@ -32,7 +32,14 @@ The remedy catalog (all row-local, all logged):
 
 Hard stops (clear ValueError, never a stack trace from deep inside sklearn):
 - target text that mostly fails to parse for a regression task;
-- fewer than MIN_LABELED_ROWS labeled rows after dropping unlabeled ones.
+- fewer than MIN_LABELED_ROWS labeled rows after dropping unlabeled ones;
+- a target with zero variance (a single distinct value) among labeled rows
+  -- there is nothing to model. Caught HERE, before profiling/cleaning ever
+  see the target: the cleaner's own "drop near-constant columns" op does
+  not know a column is the TARGET and would otherwise drop it as a
+  no-signal feature, and training would then crash on a bare KeyError for
+  the now-missing target column deep inside the pipeline instead of naming
+  the actual problem.
 
 New real-world failure modes should become new detectors/remedies HERE —
 one taxonomy, one catalog — not scattered patches in ingest/train code.
@@ -271,6 +278,22 @@ def triage_dataset(
                 fraction=round(fraction, 4),
                 hint="over 40% of rows had no label — verify the target column choice",
             )
+
+    # -- 2b. Zero-variance target ----------------------------------------------
+    # Checked AFTER coercion/missing-row-drop, on the values that would
+    # actually reach training. A single distinct value means there is
+    # nothing to model, for either task family (a classifier needs >=2
+    # classes; a regressor needs some spread) -- this must be caught here,
+    # not left for the cleaner (which sees a constant column and drops it
+    # as a no-signal FEATURE, having no way to know it's the target) or for
+    # training to crash on a bare KeyError once the target column is gone.
+    n_distinct = df[target_column].n_unique()
+    if n_distinct <= 1:
+        raise ValueError(
+            f"target column '{target_column}' has {n_distinct} distinct value(s) "
+            "among its labeled rows — there is nothing to predict. Check that "
+            "this is really the intended target column."
+        )
 
     # -- 3. Exact-duplicate rows -------------------------------------------------
     # Row-local and safe pre-split BY DEFINITION: dropping a byte-identical

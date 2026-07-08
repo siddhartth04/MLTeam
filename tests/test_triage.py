@@ -154,6 +154,29 @@ def test_triage_rejects_too_few_labeled_rows(local_store):
         )
 
 
+def test_triage_rejects_zero_variance_target(local_store):
+    """A constant target has nothing to model; raise ValueError naming the
+    target column rather than letting the cleaner drop it as a no-signal
+    feature and crash deep in training (see JUDGMENT_ROADMAP.md Task 1's
+    constant_target trap, which found this the pipeline crashing with a
+    bare KeyError)."""
+    df = pl.DataFrame(
+        {
+            "feature": list(range(60)),
+            "price": [42.0] * 60,
+        }
+    )
+    ds_id = _store_df(local_store, df, "price")
+    with pytest.raises(ValueError, match="price.*1 distinct value"):
+        triage_dataset(
+            local_store,
+            ds_id,
+            target_column="price",
+            task_type=TaskType.REGRESSION,
+            run_id=RUN,
+        )
+
+
 def test_triage_preserves_classification_labels_that_look_like_missing(local_store):
     """Classification targets like 'na' or 'none' are NOT dropped — they're class labels."""
     n = 60

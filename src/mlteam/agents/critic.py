@@ -8,6 +8,7 @@ logging an override finding when it must.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import structlog
@@ -15,12 +16,14 @@ from pydantic import BaseModel, Field
 
 from mlteam.contracts import (
     CritiqueReport,
+    DataProfile,
     EvaluationReport,
     ExcludedTemplate,
     ExperimentOutcome,
     ExperimentSpec,
     Finding,
     FindingSeverity,
+    ProblemSpec,
     Verdict,
     new_artifact,
 )
@@ -84,11 +87,32 @@ the gap is large the report should be understood at THAT threshold's confusion \
 counts, not the rank metrics alone. When it is null, do not assume a threshold \
 was chosen — say so if a deployment decision would need one.
 
+decision_context (decision_use/error_tolerance_note/human_baseline_note) tells \
+you what the model is FOR and what today's alternative is — read it before \
+judging "beats dummy" as sufficient. Any empty field there means the business \
+never said, not that there is no constraint: name that gap in a finding rather \
+than assuming a comfortable default. A relative_error_context gate, when \
+present, states MAE as a fraction of the median target value — cite it plainly \
+("typical error is X% of the median value") so the business, not just the \
+metric, can judge fitness. Note: a stated-and-violated error tolerance or a \
+high relative error without a stated tolerance is enforced deterministically \
+by the orchestrator (not by your verdict alone) — write the finding regardless, \
+so the reasoning is visible even when the override does the enforcing.
+
 For findings, cite the numeric evidence from the report. Severity: critical for \
 leakage/holdout issues, high for failing the dummy gate, medium/low for quality \
 concerns (calibration, fold variance, slice gaps, an unresolved tie, or \
 unjustified excluded coverage).
 Return only JSON matching the schema."""
+
+
+_REGRESSION_METRICS = frozenset({"rmse", "mae", "r2"})
+# Generous on purpose (JUDGMENT_ROADMAP.md Task 3): this only fires the
+# "fitness unknown" finding when NO tolerance was stated at all, so it must
+# be loose enough not to nag on ordinary, healthy models — it is a floor
+# for "the business has not told us if this is fit for purpose", not a
+# quality bar in its own right.
+_RELATIVE_ERROR_UNSTATED_TOLERANCE_THRESHOLD = 0.25
 
 
 @dataclass(frozen=True)
@@ -112,13 +136,104 @@ class CritiqueDraft(BaseModel):
     iteration_actions: list[str] = Field(default_factory=list)
 
 
+def _relative_error_ratio(
+    report: EvaluationReport, profile: DataProfile | None, target_column: str | None
+) -> float | None:
+    """MAE of the winner / median(|target|) from the profile. None when the
+    ingredients aren't there (non-regression run, no MAE reported, or no
+    profile/target given) -- shared by the report-only gate below and the
+    deterministic fitness check, so both agree on one number."""
+    if profile is None or target_column is None:
+        return None
+    mae = next((m for m in report.cv_metrics if m.name == "mae"), None)
+    if mae is None:
+        return None
+    target_col = next((c for c in profile.columns if c.name == target_column), None)
+    if target_col is None or target_col.median is None or target_col.median == 0:
+        return None
+    return mae.mean / abs(target_col.median)
+
+
+def _relative_error_context(
+    report: EvaluationReport, profile: DataProfile | None, target_column: str | None
+) -> QuantitativeGate | None:
+    """Report-only (never hard, never fails the model): states the model's
+    error in real-world terms instead of an abstract metric number."""
+    ratio = _relative_error_ratio(report, profile, target_column)
+    if ratio is None:
+        return None
+    mae = next(m for m in report.cv_metrics if m.name == "mae")
+    return QuantitativeGate(
+        name="relative_error_context",
+        passed=True,  # informational only -- never blocks a verdict
+        detail=f"typical error is {ratio:.1%} of the median target value (MAE={mae.mean:.4g})",
+        hard=False,
+    )
+
+
+_PERCENT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*%")
+
+
+def _stated_tolerance_fraction(note: str) -> float | None:
+    """Best-effort extraction of a percentage tolerance from free text
+    (e.g. "within 10% for pricing" -> 0.10). None when no percentage is
+    found -- the note is still shown to the LLM verbatim regardless; this
+    only feeds the deterministic violation check below."""
+    match = _PERCENT_PATTERN.search(note)
+    return float(match.group(1)) / 100.0 if match else None
+
+
+def _fitness_findings(
+    problem: ProblemSpec | None, ratio: float | None
+) -> tuple[tuple[Finding, ...], bool]:
+    """Deterministic fitness-for-purpose check (JUDGMENT_ROADMAP.md Task 3)
+    -- prompts steer, code enforces, so this never depends on the LLM
+    noticing the gap on its own. Returns (extra findings,
+    tolerance_violated); ``tolerance_violated`` forces the verdict away
+    from approve in ``_enforce_verdict``."""
+    if problem is None or ratio is None:
+        return (), False
+    stated = _stated_tolerance_fraction(problem.error_tolerance_note)
+    if stated is not None:
+        if ratio > stated:
+            finding = Finding(
+                severity=FindingSeverity.HIGH,
+                category="fitness_for_purpose",
+                evidence=(
+                    f"stated tolerance '{problem.error_tolerance_note}' implies "
+                    f"{stated:.1%}, but relative error is {ratio:.1%}"
+                ),
+                recommendation="do not approve until error is within the stated tolerance",
+            )
+            return (finding,), True
+        return (), False
+    if ratio > _RELATIVE_ERROR_UNSTATED_TOLERANCE_THRESHOLD:
+        finding = Finding(
+            severity=FindingSeverity.HIGH,
+            category="fitness_for_purpose",
+            evidence=f"relative error is {ratio:.1%} of the median target value",
+            recommendation=(
+                "fitness for purpose is unknown -- ask the business for an error "
+                "tolerance before treating 'beats dummy' as sufficient"
+            ),
+        )
+        return (finding,), False
+    return (), False
+
+
 def compute_quantitative_gates(
     report: EvaluationReport,
     primary_metric: str,
     *,
     missing_outcome_ids: tuple[str, ...] = (),
+    profile: DataProfile | None = None,
+    target_column: str | None = None,
 ) -> tuple[QuantitativeGate, ...]:
     """Deterministic gate results — the checklist the Critic must respect.
+
+    ``profile``/``target_column``, when given, add a report-only
+    ``relative_error_context`` gate for regression (see
+    ``_relative_error_context``) — never pass/fail, purely informational.
 
     ``missing_outcome_ids`` comes from the terminal-state audit: any planned
     experiment (including screening) with no persisted ExperimentOutcome. A
@@ -196,11 +311,18 @@ def compute_quantitative_gates(
                 hard=False,
             )
         )
+    relative_error = _relative_error_context(report, profile, target_column)
+    if relative_error is not None:
+        gates.append(relative_error)
     return tuple(gates)
 
 
 def _enforce_verdict(
-    draft: CritiqueDraft, gates: tuple[QuantitativeGate, ...]
+    draft: CritiqueDraft,
+    gates: tuple[QuantitativeGate, ...],
+    *,
+    fitness_findings: tuple[Finding, ...] = (),
+    tolerance_violated: bool = False,
 ) -> tuple[Verdict, tuple[Finding, ...], tuple[str, ...]]:
     """Code, not the LLM, has the final word on the verdict."""
     findings = [
@@ -212,6 +334,7 @@ def _enforce_verdict(
         )
         for f in draft.findings
     ]
+    findings.extend(fitness_findings)
     actions = list(draft.iteration_actions)
     verdict = draft.verdict
 
@@ -222,7 +345,13 @@ def _enforce_verdict(
     )
     dummy_failed = any(not g.passed and g.name == "beats_dummy_significantly" for g in gates)
 
-    required = Verdict.HALT if safety_failed else Verdict.ITERATE if dummy_failed else None
+    required = (
+        Verdict.HALT
+        if safety_failed
+        else Verdict.ITERATE
+        if dummy_failed or tolerance_violated
+        else None
+    )
     failed_hard = "; ".join(g.detail for g in gates if not g.passed and g.hard)
     if required is not None and verdict is not required:
         if verdict is Verdict.HALT:
@@ -250,16 +379,19 @@ def _enforce_verdict(
                 Finding(
                     severity=FindingSeverity.CRITICAL,
                     category="gate_override",
-                    evidence=failed_hard,
+                    evidence=failed_hard or "stated error tolerance violated (no hard gate failed)",
                     recommendation=(
                         "verdict overridden by deterministic quantitative gates — "
-                        "the Critic may not approve past a failed hard gate"
+                        "the Critic may not approve past a failed hard gate or a "
+                        "violated, explicitly stated error tolerance"
                     ),
                 )
             )
             verdict = required
     if verdict in (Verdict.ITERATE, Verdict.HALT) and not actions:
         actions = [f"address failed gate: {g.name} ({g.detail})" for g in gates if not g.passed]
+        if tolerance_violated:
+            actions.append("reduce error until it is within the stated business tolerance")
     return verdict, tuple(findings), tuple(actions)
 
 
@@ -292,6 +424,8 @@ def critique_evaluation(
     excluded_templates: tuple[ExcludedTemplate, ...] = (),
     winner_experiment_id: str | None = None,
     dummy_experiment_id: str | None = None,
+    profile: DataProfile | None = None,
+    problem: ProblemSpec | None = None,
 ) -> CritiqueReport:
     """Run the Critic and store its (gate-enforced) CritiqueReport.
 
@@ -300,11 +434,26 @@ def critique_evaluation(
     bare best-vs-dummy call still works (e.g. mid-iteration re-critiques that
     don't have a fresh excluded_templates list); when given, the critic sees
     the full field instead of just the winner and the dummy floor.
+
+    ``profile``/``problem``, when given (JUDGMENT_ROADMAP.md Task 3), add
+    the report-only ``relative_error_context`` gate and the deterministic
+    fitness-for-purpose check (``_fitness_findings``) — a stated-and-
+    violated error tolerance forces the verdict away from approve; an
+    absent tolerance with a high relative error adds a high-severity
+    "fitness unknown" finding without forcing anything (beats-dummy remains
+    a valid floor on its own).
     """
     audit = audit_terminal_states(planned_experiment_ids, outcomes)
+    target_column = problem.target_column if problem is not None else None
     gates = compute_quantitative_gates(
-        report, primary_metric, missing_outcome_ids=audit.missing_ids
+        report,
+        primary_metric,
+        missing_outcome_ids=audit.missing_ids,
+        profile=profile,
+        target_column=target_column,
     )
+    relative_error_ratio = _relative_error_ratio(report, profile, target_column)
+    fitness_findings, tolerance_violated = _fitness_findings(problem, relative_error_ratio)
 
     failures = compute_failure_census(outcomes)
     margin = (
@@ -358,10 +507,24 @@ def critique_evaluation(
             "excluded_templates": [
                 {"template_id": e.template_id, "reason": e.reason} for e in excluded_templates
             ],
+            "decision_context": (
+                {
+                    "decision_use": problem.decision_use,
+                    "error_tolerance_note": problem.error_tolerance_note,
+                    "human_baseline_note": problem.human_baseline_note,
+                }
+                if problem is not None
+                else None
+            ),
         },
         schema=CritiqueDraft,
     )
-    verdict, findings, actions = _enforce_verdict(result.output, gates)
+    verdict, findings, actions = _enforce_verdict(
+        result.output,
+        gates,
+        fitness_findings=fitness_findings,
+        tolerance_violated=tolerance_violated,
+    )
     critique = new_artifact(
         CritiqueReport,
         producer_agent="critic",

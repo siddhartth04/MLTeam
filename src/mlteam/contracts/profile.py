@@ -45,6 +45,7 @@ class ColumnProfile(BaseModel):
     missing_pct: float = Field(ge=0.0, le=100.0)
     mean: float | None = None
     std: float | None = None
+    median: float | None = None
     min_value: str | None = None
     max_value: str | None = None
     top_values: tuple[tuple[str, int], ...] = ()

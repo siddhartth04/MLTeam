@@ -297,6 +297,8 @@ def run_iterative_pipeline(
             outcomes=list_experiment_outcomes(store, run_id),
             winner_experiment_id=best_now,
             dummy_experiment_id=dummy_key,
+            profile=train_profile,
+            problem=spec,
         )
         records.append(
             IterationRecord(

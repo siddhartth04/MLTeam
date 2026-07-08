@@ -226,6 +226,22 @@ def run_agentic_pipeline(
     )
     reporter.stage("requirement", "done", detail=f"task: {spec.task_type.value}")
     reporter.log(f"Understood goal as {spec.task_type.value} on '{spec.target_column}'")
+    # JUDGMENT_ROADMAP.md Task 3: decision_use/error_tolerance_note/
+    # human_baseline_note are never invented (agents/requirement.py) -- an
+    # empty one means the goal text genuinely didn't say, and the human at
+    # Gate 1 must see that gap explicitly rather than a blank field they
+    # might not notice is meaningfully absent.
+    fitness_fields = {
+        "decision_use": spec.decision_use,
+        "error_tolerance_note": spec.error_tolerance_note,
+        "human_baseline_note": spec.human_baseline_note,
+    }
+    open_questions = [
+        f"{name.replace('_', ' ')}: NOT PROVIDED — the critic cannot judge "
+        "fit-for-purpose without it"
+        for name, value in fitness_fields.items()
+        if not value
+    ]
     require_approval(
         gate,
         GateName.PROBLEM_SPEC,
@@ -236,6 +252,8 @@ def run_agentic_pipeline(
             "cost_asymmetry": spec.cost_asymmetry.model_dump(),
             "assumptions": list(spec.assumptions),
             "reasoning": spec.reasoning.model_dump() if spec.reasoning else None,
+            **fitness_fields,
+            "open_questions": open_questions,
         },
     )
     # Confirmation mints a NEW artifact (content changed -> new content hash),
@@ -257,6 +275,9 @@ def run_agentic_pipeline(
         cost_asymmetry=spec.cost_asymmetry,
         assumptions=spec.assumptions,
         human_confirmed=True,
+        decision_use=spec.decision_use,
+        error_tolerance_note=spec.error_tolerance_note,
+        human_baseline_note=spec.human_baseline_note,
     )
     store.put(spec)
 
@@ -505,6 +526,8 @@ def run_agentic_pipeline(
         excluded_templates=excluded_templates,
         winner_experiment_id=best_key,
         dummy_experiment_id=dummy_key,
+        profile=train_profile,
+        problem=spec,
     )
     reporter.stage("critic", "done", detail=critique.verdict.value)
     reporter.log(f"Critic verdict: {critique.verdict.value}", stage="critic")

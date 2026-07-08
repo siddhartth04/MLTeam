@@ -76,6 +76,11 @@ def _column_profile(series: pl.Series, n_rows: int) -> ColumnProfile:
         missing_pct=round(100.0 * series.null_count() / n_rows, 4),
         mean=_finite(series.mean()) if is_numeric else None,
         std=_finite(series.std()) if is_numeric else None,
+        # JUDGMENT_ROADMAP.md Task 3: the critic's relative_error_context
+        # gate divides MAE by median(|target|) -- the median, not the mean,
+        # since a right-skewed target (the common case) makes the mean a
+        # misleading typical-value denominator.
+        median=_finite(series.median()) if is_numeric else None,
         min_value=str(non_null.min()) if non_null.len() else None,
         max_value=str(non_null.max()) if non_null.len() else None,
         top_values=top_values,

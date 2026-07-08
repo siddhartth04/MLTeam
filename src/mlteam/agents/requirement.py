@@ -54,6 +54,17 @@ n_unique to row count suggests an identifier, not a target), and sample_values. 
 Also flag in target_evidence (and target_alternatives, if relevant) any OTHER \
 column whose name or values look like a near-duplicate or derived version of \
 the target — that is a leakage risk worth surfacing even at this early stage.
+- decision_use: what DECISION the prediction powers (e.g. "flag transactions for \
+manual fraud review", "set next month's inventory order"), extracted ONLY when \
+the goal text states or clearly implies it. Leave empty otherwise — NEVER invent \
+one; a plausible-sounding but wrong decision_use is worse than an honest blank.
+- error_tolerance_note: the user's stated tolerance for error, verbatim or closely \
+paraphrased (e.g. "within 10% for pricing", "false negatives are far worse than \
+false positives"), ONLY when the goal text actually states one. Leave empty when \
+the goal is silent on tolerance — do not infer a number from domain norms.
+- human_baseline_note: what happens TODAY without this model (e.g. "an analyst \
+manually reviews each application"), ONLY when the goal text says so. Leave empty \
+otherwise.
 Return only JSON matching the schema."""
 
 
@@ -80,6 +91,12 @@ class ProblemSpecDraft(BaseModel):
     why_target: str = ""
     target_alternatives: list[str] = Field(default_factory=list)
     target_evidence: list[str] = Field(default_factory=list)
+    # JUDGMENT_ROADMAP.md Task 3 — extracted only when the goal text states
+    # them; NEVER invented (see SYSTEM_PROMPT). Optional-with-defaults so
+    # fixtures recorded before these fields existed still validate.
+    decision_use: str = ""
+    error_tolerance_note: str = ""
+    human_baseline_note: str = ""
 
 
 def understand_requirements(
@@ -161,6 +178,9 @@ def understand_requirements(
         ),
         assumptions=tuple(draft.assumptions),
         human_confirmed=False,
+        decision_use=draft.decision_use,
+        error_tolerance_note=draft.error_tolerance_note,
+        human_baseline_note=draft.human_baseline_note,
         reasoning=DecisionRecord(
             decision=f"target_column = '{draft.target_column}' ({draft.task_type.value})",
             why=draft.why_target,

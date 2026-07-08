@@ -63,3 +63,10 @@ class ProblemSpec(Artifact):
     # WHY this target/task_type was chosen over alternatives — optional so
     # artifacts stored before this field existed still load unchanged.
     reasoning: DecisionRecord | None = None
+    # JUDGMENT_ROADMAP.md Task 3: what the model is FOR, extracted from the
+    # goal text when present. Never invented when absent (an invented
+    # tolerance is worse than none) -- Gate 1 surfaces empty ones as open
+    # questions instead of the requirement agent guessing.
+    decision_use: str = ""
+    error_tolerance_note: str = ""
+    human_baseline_note: str = ""

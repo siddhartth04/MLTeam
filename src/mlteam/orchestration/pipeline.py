@@ -32,6 +32,7 @@ from mlteam.contracts import (
     ExperimentState,
     TaskType,
     TrainedModel,
+    WarningCode,
     new_artifact,
 )
 from mlteam.evaluation.metrics import better_than
@@ -87,14 +88,26 @@ def new_run_id() -> str:
 def default_experiment_specs(
     include_tabpfn: bool = True,
     lgbm_config: dict | None = None,
+    target_transform: str | None = None,
 ) -> tuple[ExperimentSpec, ...]:
-    """Phase 1 baseline set. Dummy always first — the plan validator insists."""
+    """Phase 1 baseline set. Dummy always first — the plan validator insists.
+
+    ``target_transform``, when set (JUDGMENT_ROADMAP.md Task 2's profiler
+    recommendation for a REGRESSION run), is applied to every baseline
+    INCLUDING the dummy — a dummy wrapped in log1p predicts the geometric
+    mean, a legitimate floor for a log-scale-linear target, not an
+    arbitrary handicap. TabPFN is excluded: it is a from-scratch classifier/
+    regressor with its own internal normalization, not a sklearn Pipeline
+    this wraps the same way, and it is a candidate template here, not a
+    place Task 2 has evaluated the transform's interaction.
+    """
     specs = [
         ExperimentSpec(
             experiment_id="exp-dummy",
             template_id=_DUMMY,
             budget=BudgetEstimate(wall_time_seconds=2),
             is_baseline=True,
+            target_transform=target_transform,
         ),
         ExperimentSpec(
             experiment_id="exp-lightgbm",
@@ -102,6 +115,7 @@ def default_experiment_specs(
             config=dict(lgbm_config or {}),
             budget=BudgetEstimate(wall_time_seconds=30),
             is_baseline=True,
+            target_transform=target_transform,
         ),
     ]
     if include_tabpfn:
@@ -376,7 +390,14 @@ def run_tabular_pipeline(
         run_id=run_id,
     )
 
-    specs = default_experiment_specs(include_tabpfn=include_tabpfn, lgbm_config=lgbm_config)
+    target_transform = None
+    if task_type is TaskType.REGRESSION and any(
+        w.code is WarningCode.TARGET_TRANSFORM_RECOMMENDED for w in train_profile.warnings
+    ):
+        target_transform = "log1p"
+    specs = default_experiment_specs(
+        include_tabpfn=include_tabpfn, lgbm_config=lgbm_config, target_transform=target_transform
+    )
     plan = new_artifact(
         ExperimentPlan,
         producer_agent="experiment-planner",

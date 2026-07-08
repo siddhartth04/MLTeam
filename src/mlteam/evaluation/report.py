@@ -177,6 +177,7 @@ def _calibration_and_threshold(
             task_type=task_type,
             seed=seed,
             n_folds=n_folds,
+            target_transform=model_result.model.target_transform,
             reporter=reporter,
         )
     except Exception:  # noqa: BLE001 - best-effort, never blocks the report

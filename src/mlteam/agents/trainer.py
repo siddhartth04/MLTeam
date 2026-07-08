@@ -24,7 +24,7 @@ from mlteam.contracts.model import TrainedModel
 from mlteam.evaluation.metrics import scoring_for, summarize_folds, to_natural_sign
 from mlteam.evaluation.results import TrainResult
 from mlteam.store.interface import ArtifactStore
-from mlteam.templates.registry import ColumnRoles, get_template
+from mlteam.templates.registry import ColumnRoles, get_template, wrap_target_transform
 
 _log = structlog.get_logger(__name__)
 
@@ -136,7 +136,15 @@ def train_experiment(
     template = get_template(spec.template_id)
     if not template.supports(task_type):
         raise ValueError(f"template '{spec.template_id}' does not support {task_type}")
-    pipeline = template.build(task_type, roles, spec.config, seed)
+    if spec.target_transform is not None and (target < 0).any():
+        raise ValueError(
+            f"target_transform='{spec.target_transform}' requires a non-negative "
+            f"target, but experiment '{spec.experiment_id}' has "
+            f"{int((target < 0).sum())} negative value(s)"
+        )
+    pipeline = wrap_target_transform(
+        template.build(task_type, roles, spec.config, seed), spec.target_transform, task_type
+    )
 
     metrics = _cross_validate(pipeline, frame, target, task_type, n_folds, seed)
     pipeline.fit(frame, target)
@@ -162,6 +170,7 @@ def train_experiment(
         env_hash=env_hash,
         train_data_ref=dataset.ref(),
         mlflow_run_id=mlflow_run_id,
+        target_transform=spec.target_transform,
     )
     store.put(model)
     _log.info(

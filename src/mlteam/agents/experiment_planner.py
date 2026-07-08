@@ -22,6 +22,7 @@ from mlteam.contracts import (
     ExperimentPlan,
     ExperimentSpec,
     ProblemSpec,
+    TaskType,
     new_artifact,
 )
 from mlteam.llm.client import LLMClient
@@ -63,6 +64,11 @@ one candidate that supports it (linear_default, svm_default, random_forest_defau
 extra_trees_default, lightgbm_default only — any other template rejects this key). \
 Do not set it as the ONLY response to imbalance; still schedule the usual \
 candidate slate.
+- If the profile flags target_transform_recommended (regression only — the target \
+spans multiple orders of magnitude or is heavily right-skewed), set \
+target_transform="log1p" on at least one non-baseline candidate so its performance \
+can be compared against the raw-fit baselines. Never set it for a non-regression \
+task or without that profile flag present.
 - rationale should reference the profile (size, imbalance, cardinality).
 - excluded_templates: list the major template families you did NOT schedule and \
 WHY (e.g. "svm_default: skipped, >20k rows makes its quadratic cost prohibitive"; \
@@ -187,6 +193,11 @@ class ExperimentDraft(BaseModel):
     template_id: str
     config: ModelConfigDraft = Field(default_factory=ModelConfigDraft)
     is_baseline: bool = False
+    # Whitelist matches templates/registry.py's TARGET_TRANSFORMS -- the
+    # grammar itself (Literal, not str) rejects any other value the LLM
+    # might propose; _post_validate additionally rejects it outside
+    # REGRESSION, since the type alone can't see task_type.
+    target_transform: Literal["log1p"] | None = None
 
 
 class ExcludedTemplateDraft(BaseModel):
@@ -221,6 +232,9 @@ already trained.
 (baselines already exist).
 - config keys must be valid model constructor parameters. Ground every choice \
 in the critique actions and prior results.
+- target_transform="log1p" may be set for a REGRESSION task when the Critic's \
+actions or prior results point at a skewed target (e.g. a raw-scale MAE dominated \
+by a few large values); never for a non-regression task.
 - rationale must say which critique action each experiment addresses.
 Return only JSON matching the schema."""
 
@@ -270,6 +284,11 @@ def revise_experiment_plan(
                 )
             if exp.is_baseline:
                 raise ValueError("revision experiments must have is_baseline=false")
+            if exp.target_transform is not None and problem.task_type is not TaskType.REGRESSION:
+                raise ValueError(
+                    f"target_transform is only valid for regression; "
+                    f"experiment '{exp.experiment_id}' is {problem.task_type.value}"
+                )
 
     result = client.structured(
         agent="experiment-planner-revision",
@@ -291,6 +310,7 @@ def revise_experiment_plan(
                 config=e.config.to_config(),
                 budget=estimate_budget(e.template_id, n_rows),
                 is_baseline=False,
+                target_transform=e.target_transform,
             )
             for e in result.output.experiments
         ),
@@ -349,6 +369,11 @@ def plan_experiments(
                 raise ValueError(
                     f"template '{exp.template_id}' does not accept class_weight; "
                     f"only {sorted(_CLASS_WEIGHT_CAPABLE_TEMPLATES)} do"
+                )
+            if exp.target_transform is not None and problem.task_type is not TaskType.REGRESSION:
+                raise ValueError(
+                    f"target_transform is only valid for regression; "
+                    f"experiment '{exp.experiment_id}' is {problem.task_type.value}"
                 )
         first_two = [e.template_id for e in draft.experiments[:2]]
         if first_two[:1] != ["dummy_baseline"] or (
@@ -414,6 +439,7 @@ def plan_experiments(
                 config=e.config.to_config(),
                 budget=estimate_budget(e.template_id, n_rows),
                 is_baseline=e.is_baseline,
+                target_transform=e.target_transform,
             )
             for e in draft.experiments
         ),

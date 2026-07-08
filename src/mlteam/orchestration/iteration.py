@@ -209,6 +209,7 @@ def run_iterative_pipeline(
                     space=hpo_space_override,
                     experiment_id=hpo_id,
                     mlflow_enabled=mlflow_enabled,
+                    target_transform=results[best_now].model.target_transform,
                 )
                 results[hpo_id] = hpo_outcome.result
                 new_ids.append(hpo_id)

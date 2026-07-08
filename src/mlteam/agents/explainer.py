@@ -306,6 +306,7 @@ def explain_model(
         task_type=task_type,
         seed=seed,
         n_folds=n_folds,
+        target_transform=model.target_transform,
         reporter=reporter,
         reporter_stage="explain",
     )

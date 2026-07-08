@@ -12,6 +12,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 from mlteam.contracts import TaskType
 
 _CLASSIFICATION = frozenset(
@@ -1062,6 +1064,52 @@ def get_template(template_id: str) -> PipelineTemplate:
     if template is None:
         raise KeyError(f"unknown template '{template_id}'; registered: {sorted(_TEMPLATES)}")
     return template
+
+
+# Whitelist, not free-form (JUDGMENT_ROADMAP.md Task 2): log1p over a bare
+# log because it tolerates exact zeros (log(0) is -inf; log1p(0) is 0), which
+# matters for price-like/count-like targets that legitimately hit zero.
+# Requires targets >= 0 (enforced loudly, not silently clipped) since log1p
+# of a negative value below -1 is undefined and between -1 and 0 silently
+# produces a valid-looking but meaningless negative output.
+TARGET_TRANSFORMS = frozenset({"log1p"})
+
+
+def wrap_target_transform(pipeline: Any, transform: str | None, task_type: TaskType) -> Any:
+    """Wrap ``pipeline`` in a ``TransformedTargetRegressor`` for ``transform``.
+
+    Returns ``pipeline`` unchanged for ``None`` (the overwhelmingly common
+    case — most targets need no transform). Wrapping the whole pipeline
+    (preprocessing + model) rather than just the final estimator means
+    every sklearn scorer, CV metric, holdout metric, and baseline-delta
+    computation calls ``.predict()`` and automatically gets ORIGINAL-unit
+    predictions back (``inverse_func`` runs inside ``predict()``) — no
+    metric plumbing anywhere else needs to know a transform happened.
+
+    Only ``fit``/``predict``/``score`` are proxied by
+    ``TransformedTargetRegressor``; a template whose estimator exposes
+    extra methods (e.g. ``QuantileGBMRegressor.predict_quantiles``) loses
+    access to them once wrapped — out of scope here since target_transform
+    is opt-in per experiment, never a template-wide default.
+    """
+    if transform is None:
+        return pipeline
+    if task_type is not TaskType.REGRESSION:
+        raise ValueError(
+            f"target_transform is only supported for {TaskType.REGRESSION.value} "
+            f"(FORECASTING is excluded: lag/rolling features are computed from the "
+            f"raw target pre-split, so mixing raw-scale features with transformed-"
+            f"scale fitting is a correctness question deferred deliberately); "
+            f"got task_type={task_type.value}"
+        )
+    if transform not in TARGET_TRANSFORMS:
+        raise ValueError(
+            f"unknown target_transform '{transform}'; supported: {sorted(TARGET_TRANSFORMS)}"
+        )
+
+    from sklearn.compose import TransformedTargetRegressor
+
+    return TransformedTargetRegressor(regressor=pipeline, func=np.log1p, inverse_func=np.expm1)
 
 
 def list_templates(task_type: TaskType | None = None) -> tuple[PipelineTemplate, ...]:

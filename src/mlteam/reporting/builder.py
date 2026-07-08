@@ -310,6 +310,7 @@ def build_final_report(
         ),
         best_template=inputs.best_template_id,
         best_experiment=inputs.best_experiment_id,
+        target_transform=inputs.model.target_transform,
         cv_metrics=[
             {
                 "name": m.name,

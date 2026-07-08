@@ -30,6 +30,9 @@ class ExperimentSpec(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     budget: BudgetEstimate
     is_baseline: bool = False
+    # Regression-only (see templates/registry.py's TARGET_TRANSFORMS whitelist).
+    # Optional-with-default so plans stored before this field existed still load.
+    target_transform: str | None = None
 
 
 class ExcludedTemplate(BaseModel):

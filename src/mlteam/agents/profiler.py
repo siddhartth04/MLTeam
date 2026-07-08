@@ -34,6 +34,12 @@ _ID_UNIQUE_FRACTION = 0.95
 _LEAK_MI_THRESHOLD = 0.9
 _LEAK_CORR_THRESHOLD = 0.99
 _IMBALANCE_MINORITY_FRACTION = 0.10
+# JUDGMENT_ROADMAP.md Task 2: either condition alone is common in ordinary
+# data (a mild right skew, or one big outlier); requiring BOTH would miss
+# real cases, so either one recommends the transform (the trainer decides
+# whether to actually apply it — this is only a signal).
+_TARGET_TRANSFORM_SKEW_THRESHOLD = 2.0
+_TARGET_TRANSFORM_TAIL_RATIO_THRESHOLD = 20.0
 
 
 def _finite(value: object) -> float | None:
@@ -240,12 +246,58 @@ def _column_warnings(df: pl.DataFrame, target_column: str | None) -> list[Profil
     return warnings
 
 
+def _target_transform_recommendation(
+    df: pl.DataFrame, target_column: str | None
+) -> ProfileWarning | None:
+    """Flag a regression-shaped target as a log1p transform candidate.
+
+    Gated on ``not _is_class_like`` so a genuinely categorical numeric
+    target (e.g. binary 0/1) is never mistaken for a skewed continuous one
+    -- this is why the check lives on the RAW values, not a task_type
+    parameter profile_dataset doesn't receive (see module docstring: this
+    file is deterministic profiling, task-agnostic by design).
+    """
+    if target_column is None or target_column not in df.columns:
+        return None
+    series = df[target_column]
+    if not series.dtype.is_numeric() or _is_class_like(series):
+        return None
+    values = series.drop_nulls().to_numpy().astype(np.float64)
+    if values.size < 2 or values.min() < 0:
+        return None
+
+    from scipy.stats import skew as _skew
+
+    skewness = float(_skew(values))
+    p50 = float(np.median(values))
+    p99 = float(np.percentile(values, 99))
+    tail_ratio = p99 / p50 if p50 > 0 else None
+    skewed = skewness > _TARGET_TRANSFORM_SKEW_THRESHOLD
+    long_tailed = tail_ratio is not None and tail_ratio > _TARGET_TRANSFORM_TAIL_RATIO_THRESHOLD
+    if not (skewed or long_tailed):
+        return None
+    tail_note = f", p99/p50={tail_ratio:.1f}" if tail_ratio is not None else ""
+    return ProfileWarning(
+        code=WarningCode.TARGET_TRANSFORM_RECOMMENDED,
+        severity=WarningSeverity.INFO,
+        column=target_column,
+        message=(
+            f"'{target_column}' spans multiple orders of magnitude "
+            f"(skew={skewness:.2f}{tail_note}) — a log1p target transform is "
+            "likely to help"
+        ),
+    )
+
+
 def _dataset_warnings(
     df: pl.DataFrame,
     target_column: str | None,
     relationships: tuple[TargetRelationship, ...],
 ) -> list[ProfileWarning]:
     warnings: list[ProfileWarning] = []
+    transform_rec = _target_transform_recommendation(df, target_column)
+    if transform_rec is not None:
+        warnings.append(transform_rec)
     n_duplicates = df.height - df.unique().height
     if n_duplicates > 0:
         warnings.append(

@@ -109,6 +109,11 @@ _TECHNICAL_TEMPLATE = """<!doctype html>
 <tr><th>Target</th><td>{{ problem.target_column }}</td></tr>
 <tr><th>Primary metric</th><td>{{ problem.primary_metric }}</td></tr>
 <tr><th>Best model</th><td>{{ best_template }} ({{ best_experiment }})</td></tr>
+{% if target_transform is not none %}
+<tr><th>Target transform</th><td>{{ target_transform }} — all metrics below (CV and
+holdout) are reported in ORIGINAL units; the transform is inverted automatically
+at prediction time.</td></tr>
+{% endif %}
 {% if forecast_horizon is not none %}
 <tr><th>Forecast horizon</th><td>{{ forecast_horizon }}-step-ahead — every metric below
 (CV and holdout) measures the model's ability to predict {{ forecast_horizon }} step(s)

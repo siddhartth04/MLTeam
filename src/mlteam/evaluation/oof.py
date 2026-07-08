@@ -21,7 +21,7 @@ from mlteam.agents.data_io import read_dataset
 from mlteam.agents.trainer import _column_roles, _make_cv, _temporal_to_epoch
 from mlteam.contracts import TaskType
 from mlteam.store.interface import ArtifactStore
-from mlteam.templates.registry import get_template
+from mlteam.templates.registry import get_template, wrap_target_transform
 
 if TYPE_CHECKING:
     from mlteam.orchestration.progress import ProgressReporter
@@ -57,6 +57,7 @@ def compute_oof(
     task_type: TaskType,
     seed: int,
     n_folds: int,
+    target_transform: str | None = None,
     reporter: ProgressReporter | None = None,
     reporter_stage: str = "evaluate",
 ) -> OOFResult:
@@ -89,7 +90,9 @@ def compute_oof(
     target = frame.pop(dataset.target_column)
 
     template = get_template(template_id)
-    base_pipeline = template.build(task_type, roles, config, seed)
+    base_pipeline = wrap_target_transform(
+        template.build(task_type, roles, config, seed), target_transform, task_type
+    )
     cv = _make_cv(task_type, n_folds, seed)
 
     n = len(frame)

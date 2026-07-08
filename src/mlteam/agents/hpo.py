@@ -25,7 +25,7 @@ from mlteam.agents.trainer import (
 from mlteam.contracts import BudgetEstimate, ExperimentSpec, TaskType
 from mlteam.evaluation.metrics import scoring_for, to_natural_sign
 from mlteam.store.interface import ArtifactStore
-from mlteam.templates.registry import get_template
+from mlteam.templates.registry import get_template, wrap_target_transform
 
 _log = structlog.get_logger(__name__)
 
@@ -127,12 +127,19 @@ def _objective_factory(
     n_folds: int,
     seed: int,
     space: SearchSpace,
+    target_transform: str | None = None,
 ) -> Callable[[Any], float]:
     """Objective with fold-by-fold reporting so ASHA pruning can bite.
 
     sklearn scorers are maximize-oriented by convention (neg_rmse etc. already
     return higher-is-better values), so the study maximizes the raw scorer
     value with NO manual sign flip — the study direction is always 'maximize'.
+
+    ``target_transform``, when set, wraps each trial's pipeline the same way
+    the deterministic trainer does — the search must optimize on the SAME
+    scale the winning model will actually be scored/served on, or a trial
+    that looks good under log1p could lose to one that only looks good
+    raw.
     """
     import optuna
     from sklearn.base import clone
@@ -144,7 +151,9 @@ def _objective_factory(
 
     def objective(trial: Any) -> float:
         params = space(trial)
-        pipeline = template.build(task_type, roles, params, seed)
+        pipeline = wrap_target_transform(
+            template.build(task_type, roles, params, seed), target_transform, task_type
+        )
         scores: list[float] = []
         for step, (train_idx, test_idx) in enumerate(cv.split(frame, target)):
             fitted = clone(pipeline).fit(frame.iloc[train_idx], target.iloc[train_idx])
@@ -175,6 +184,7 @@ def tune_experiment(
     experiment_id: str | None = None,
     mlflow_enabled: bool = False,
     report_seed: int | None = None,
+    target_transform: str | None = None,
 ) -> HPOOutcome:
     """Run an Optuna study and store the retrained best config as a model.
 
@@ -223,6 +233,7 @@ def tune_experiment(
             n_folds=n_folds,
             seed=seed,
             space=space,
+            target_transform=target_transform,
         ),
         n_trials=n_trials,
         timeout=timeout_seconds,
@@ -251,6 +262,7 @@ def tune_experiment(
         config=dict(study.best_params),
         budget=BudgetEstimate(wall_time_seconds=0.0),
         is_baseline=False,
+        target_transform=target_transform,
     )
     # Re-score the winning config on report_seed's folds -- NOT the folds
     # the search just optimized it against. When report_seed == seed (the

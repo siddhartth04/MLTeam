@@ -198,7 +198,7 @@ TRAPS: tuple[TrapSpec, ...] = (
         target_column="price",
         task_type=TaskType.REGRESSION,
         expected="log1p-transform a price-like target spanning >=3 orders of magnitude",
-        blocked_by="Task 2",
+        blocked_by=None,  # closed by JUDGMENT_ROADMAP.md Task 2
     ),
     TrapSpec(
         name="leaky_feature",

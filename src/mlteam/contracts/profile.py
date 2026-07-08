@@ -18,6 +18,7 @@ class WarningCode(StrEnum):
     DATETIME_DETECTED = "datetime_detected"
     TARGET_IMBALANCE = "target_imbalance"
     DUPLICATE_ROWS = "duplicate_rows"
+    TARGET_TRANSFORM_RECOMMENDED = "target_transform_recommended"
 
 
 class WarningSeverity(StrEnum):

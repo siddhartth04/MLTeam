@@ -109,6 +109,52 @@ def test_id_memorization_drops_the_identifier_column(tmp_path):
     assert "customer_id" not in cleaned.columns
 
 
+def test_skewed_price_target_gets_a_log1p_transform(tmp_path):
+    """JUDGMENT_ROADMAP.md Task 2 flips this trap: the profiler recommends
+    log1p for a target spanning multiple orders of magnitude, and the
+    deterministic pipeline applies it to every regression baseline. The
+    winner must carry target_transform=="log1p", beat an identically
+    configured raw-target run (run both here — the comparison is the
+    point), and report metrics in ORIGINAL units, not log-scale."""
+    from mlteam.agents.trainer import compute_env_hash, train_experiment
+    from mlteam.contracts import BudgetEstimate, ExperimentSpec
+
+    store, result = _run(
+        tmp_path,
+        skewed_price_target(),
+        target_column="price",
+        task_type=TaskType.REGRESSION,
+        primary_metric="mae",
+        run_id="trap-skewed-price",
+    )
+    winner = store.get(result.evaluation_report.model_ref.artifact_id)
+    assert winner.target_transform == "log1p"
+
+    raw_spec = ExperimentSpec(
+        experiment_id="raw-comparison",
+        template_id=winner.template_id,
+        config=dict(winner.config),
+        budget=BudgetEstimate(wall_time_seconds=30),
+        is_baseline=False,
+        target_transform=None,
+    )
+    raw_result = train_experiment(
+        store,
+        result.cleaned_dataset_id,
+        raw_spec,
+        task_type=TaskType.REGRESSION,
+        run_id="trap-skewed-price",
+        seed=42,
+        n_folds=3,
+        env_hash=compute_env_hash(),
+    )
+    winner_mae = next(m for m in result.evaluation_report.cv_metrics if m.name == "mae").mean
+    assert winner_mae < raw_result.metrics["mae"].mean
+
+    winner_rmse = next(m for m in result.evaluation_report.cv_metrics if m.name == "rmse").mean
+    assert winner_rmse > 1000  # original units -- log-scale rmse would be ~0-10
+
+
 def test_duplicate_rows_are_deduped_before_split(tmp_path):
     """Exact-duplicate rows must be removed by triage, before any split can
     let an identical row land in both train and holdout."""
@@ -149,27 +195,6 @@ def test_placeholder_labels_are_coerced_and_named(tmp_path):
 
 # -- blocked traps (xfail, keyed to the roadmap task that closes them) --
 
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="blocked by JUDGMENT_ROADMAP.md Task 2 (log1p target transform)",
-)
-def test_skewed_price_target_gets_a_log1p_transform(tmp_path):
-    """Calibration (plain LightGBM, noise std 0.8, see judgment_traps.py):
-    raw-fit MAE ~381k vs log1p-fit MAE ~347k (~10% better). The real
-    pipeline's raw-fit MAE today is ~373k; Task 2 must bring the best
-    achieved MAE below 350k (a ~6% improvement -- a conservative slice of
-    the ~10% measured gap) to prove the transform is actually being used."""
-    _, result = _run(
-        tmp_path,
-        skewed_price_target(),
-        target_column="price",
-        task_type=TaskType.REGRESSION,
-        primary_metric="mae",
-        run_id="trap-skewed-price",
-    )
-    best_mae = min(tr.metrics["mae"].mean for tr in result.train_results.values())
-    assert best_mae < 350_000
 
 
 @pytest.mark.xfail(

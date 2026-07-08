@@ -24,3 +24,8 @@ class TrainedModel(Artifact):
     env_hash: str = Field(min_length=1, description="Hash of the locked dependency environment")
     train_data_ref: ArtifactRef
     mlflow_run_id: str | None = None
+    # Regression-only target transform applied before fitting (e.g. "log1p"),
+    # or None for a raw-scale fit. INCLUDED in hashing (not HASH_EXCLUDED) --
+    # a transformed model is a genuinely different model. Optional-with-
+    # default so models stored before this field existed still load.
+    target_transform: str | None = None

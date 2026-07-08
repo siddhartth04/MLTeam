@@ -124,6 +124,7 @@ def _run_screening(
     n_folds: int,
     env_hash: str,
     mlflow_enabled: bool,
+    reporter: ProgressReporter = NULL_REPORTER,
 ) -> tuple[list[dict[str, object]], dict[str, TrainResult]]:
     """Train the cheap probe trio; return (a) plain-dict summaries for the
     planner's LLM payload and (b) the actual TrainResults, keyed by
@@ -151,6 +152,7 @@ def _run_screening(
         n_folds=n_folds,
         env_hash=env_hash,
         mlflow_enabled=mlflow_enabled,
+        reporter=reporter,
     )
     screen_ids = {s.experiment_id for s in specs}
     outcomes = [
@@ -378,6 +380,7 @@ def run_agentic_pipeline(
         n_folds=n_folds,
         env_hash=env_hash,
         mlflow_enabled=mlflow_enabled,
+        reporter=reporter,
     )
 
     # -- LLM experiment plan + GATE 2 ----------------------------------------
@@ -449,6 +452,7 @@ def run_agentic_pipeline(
         n_folds=n_folds,
         env_hash=env_hash,
         mlflow_enabled=mlflow_enabled,
+        reporter=reporter,
     )
     dummy_key = _dummy_key(tuple(specs))
     _check_experiment_quorum(tuple(specs), results, skipped, dummy_key)
@@ -481,6 +485,7 @@ def run_agentic_pipeline(
         cost_asymmetry=spec.cost_asymmetry,
         n_folds=n_folds,
         seed=seed,
+        reporter=reporter,
     )
     reporter.stage("evaluate", "done")
     reporter.log(f"Evaluation report built for winner {best_key}", stage="evaluate")

@@ -107,6 +107,34 @@ def test_reporter_logs_at_least_one_line_per_stage():
         assert stage in logged_stages, f"no log line recorded for stage '{stage}'"
 
 
+def test_reporter_logs_a_line_per_experiment_during_training():
+    """A single house-prices run spent 59 silent minutes in the 'train'
+    stage (four experiments, one a 5-base-learner stacking ensemble on
+    187k rows) with only ONE log line at the very end -- the dashboard's
+    activity feed showed no distinction between "training" and "hung".
+    Every planned experiment (screening probes included, since they also
+    run under _train_all) must now log at least a start line and a
+    resolution line (completed/reused/failed), not just one summary at
+    stage completion."""
+    reporter = RecordingReporter()
+    result, _client = _run(reporter)
+
+    train_logs = [msg for msg, _level, stage in reporter.log_calls if stage == "train"]
+    # Screening probes (screen-dummy, screen-linear, screen-lightgbm) plus
+    # the plan's own experiments (exp-dummy, exp-lgbm-default, exp-lgbm-tuned)
+    # all train under _train_all and must each get their own log lines --
+    # PipelineResult.train_results is the merged screening+plan dict.
+    all_experiment_ids = set(result.pipeline.train_results)
+    assert all_experiment_ids  # sanity: the fixture actually trained something
+    for experiment_id in all_experiment_ids:
+        matching = [line for line in train_logs if experiment_id in line]
+        assert matching, f"no 'train' stage log line mentions {experiment_id}"
+
+    # More than one line per experiment (start + resolution), not a single
+    # end-of-stage summary -- that's the whole point of this fix.
+    assert len(train_logs) > len(all_experiment_ids)
+
+
 def test_reporter_does_not_change_llm_call_count_or_order():
     """Fixture-replay safety: adding progress reporting must not add or
     reorder LLM calls. Compare a reporter-driven run against a plain run."""
@@ -119,3 +147,72 @@ def test_reporter_does_not_change_llm_call_count_or_order():
     assert set(baseline_result.pipeline.train_results) == set(
         reported_result.pipeline.train_results
     )
+
+
+def test_explain_model_logs_per_fold_oof_progress_tagged_as_explain():
+    """explain_model's OOF refit (evaluation.oof.compute_oof, via
+    _oof_permutation_importance) is the exact call that spent 45+ silent
+    minutes refitting a stacking ensemble in a live run. Confirms the
+    reporter receives per-fold lines tagged 'explain' -- NOT 'evaluate',
+    which compute_oof also logs under for build_evaluation_report's
+    calibration path; mislabeling would misattribute explainability's
+    progress to the wrong dashboard stage."""
+    import numpy as np
+    import polars as pl
+
+    from mlteam.agents.data_io import store_dataframe
+    from mlteam.agents.explainer import explain_model
+    from mlteam.agents.trainer import train_experiment
+    from mlteam.contracts import BudgetEstimate, DatasetRole, ExperimentSpec, TaskType
+    from mlteam.store import GuardedArtifactStore, LocalArtifactStore
+
+    rng = np.random.default_rng(0)
+    n = 150
+    x = rng.normal(size=n)
+    y = (x + rng.normal(scale=0.3, size=n) > 0).astype(int)
+    df = pl.DataFrame({"x": x, "target": y})
+    root = Path(tempfile.mkdtemp()) / "store"
+    store = GuardedArtifactStore(LocalArtifactStore(root), db_path=root / "guard.db")
+    dataset = store_dataframe(
+        store,
+        df,
+        role=DatasetRole.CLEANED,
+        producer_agent="test",
+        run_id="explain-oof-progress",
+        target_column="target",
+    )
+    spec = ExperimentSpec(
+        experiment_id="exp-model",
+        template_id="lightgbm_default",
+        config={"n_estimators": 15},
+        budget=BudgetEstimate(wall_time_seconds=5),
+    )
+    trained = train_experiment(
+        store,
+        dataset.meta.artifact_id,
+        spec,
+        task_type=TaskType.BINARY_CLASSIFICATION,
+        run_id="explain-oof-progress",
+        seed=1,
+        n_folds=3,
+        env_hash="test-env",
+    )
+
+    reporter = RecordingReporter()
+    explain_model(
+        store,
+        trained.model,
+        train_dataset_id=dataset.meta.artifact_id,
+        task_type=TaskType.BINARY_CLASSIFICATION,
+        run_id="explain-oof-progress",
+        primary_metric="roc_auc",
+        n_folds=3,
+        seed=1,
+        reporter=reporter,
+    )
+
+    explain_logs = [msg for msg, _level, stage in reporter.log_calls if stage == "explain"]
+    evaluate_logs = [msg for msg, _level, stage in reporter.log_calls if stage == "evaluate"]
+    assert len(explain_logs) >= 3 * 2, "expected at least a start+complete line per fold"
+    assert any("fold 1/3" in msg for msg in explain_logs)
+    assert not evaluate_logs, "explain_model's OOF refit must not be tagged as 'evaluate'"

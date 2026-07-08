@@ -37,6 +37,7 @@ from mlteam.contracts import (
 from mlteam.evaluation.metrics import better_than
 from mlteam.evaluation.report import build_evaluation_report
 from mlteam.evaluation.results import list_experiment_outcomes, store_experiment_outcome
+from mlteam.orchestration.progress import NULL_REPORTER, ProgressReporter
 from mlteam.store.guard import GuardedArtifactStore
 
 _log = structlog.get_logger(__name__)
@@ -159,6 +160,7 @@ def _train_all(
     n_folds: int,
     env_hash: str,
     mlflow_enabled: bool,
+    reporter: ProgressReporter = NULL_REPORTER,
 ) -> tuple[dict[str, TrainResult], tuple[tuple[str, str], ...]]:
     """Train every spec; non-dummy failures are skipped LOUDLY, not fatally.
 
@@ -175,12 +177,22 @@ def _train_all(
     additional training cost. A reused spec still gets its own
     ExperimentOutcome (so the leaderboard shows it under ITS experiment_id),
     just with wall_time_seconds=0 and a log line marking the reuse.
+
+    ``reporter`` emits one log line per spec as it starts and another as it
+    resolves (reused / completed / failed) — a single house-prices run today
+    spent 59 silent minutes here (four experiments, one a 5-base-learner
+    stacking ensemble on 187k rows) with nothing on the dashboard's activity
+    feed to distinguish "training" from "hung". Structlog's per-experiment
+    events (``experiment_trained``/``experiment_reused``/``experiment_skipped``)
+    already existed for the server log; they were just never forwarded to
+    the run registry the dashboard actually streams from.
     """
     reusable = _completed_outcomes_by_key(store, run_id, dataset_id, seed, env_hash)
     results: dict[str, TrainResult] = {}
     skipped: list[tuple[str, str]] = []
     for spec in specs:
         started = time.monotonic()
+        reporter.log(f"Training {spec.experiment_id} ({spec.template_id})...", stage="train")
         reused = reusable.get(_reuse_key(dataset_id, seed, env_hash, spec))
         try:
             if reused is not None:
@@ -194,6 +206,11 @@ def _train_all(
                     template=spec.template_id,
                     reused_from=reused.experiment_id,
                 )
+                reporter.log(
+                    f"{spec.experiment_id} reused cached result from "
+                    f"{reused.experiment_id} (identical config+data+seed)",
+                    stage="train",
+                )
             else:
                 result = train_experiment(
                     store,
@@ -205,6 +222,15 @@ def _train_all(
                     n_folds=n_folds,
                     env_hash=env_hash,
                     mlflow_enabled=mlflow_enabled,
+                )
+                elapsed = time.monotonic() - started
+                metrics_str = ", ".join(
+                    f"{name}={m.mean:.4f}" for name, m in result.metrics.items()
+                )
+                reporter.log(
+                    f"{spec.experiment_id} ({spec.template_id}) completed in "
+                    f"{elapsed:.1f}s: {metrics_str}",
+                    stage="train",
                 )
             results[spec.experiment_id] = result
             store_experiment_outcome(
@@ -234,6 +260,11 @@ def _train_all(
                 template=spec.template_id,
                 error=str(exc),
                 hint="baseline skipped; remaining baselines still run",
+            )
+            reporter.log(
+                f"{spec.experiment_id} ({spec.template_id}) FAILED: {exc}",
+                level="warning",
+                stage="train",
             )
             skipped.append((spec.template_id, str(exc)))
     return results, tuple(skipped)

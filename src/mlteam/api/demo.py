@@ -133,6 +133,7 @@ def seed_demo_run(
             primary_metric=spec.primary_metric,
             n_folds=5,
             run_id=result.initial.run_id,
+            reporter=reporter,
         )
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")
 

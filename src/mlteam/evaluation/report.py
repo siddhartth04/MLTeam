@@ -6,6 +6,8 @@ sanctioned way to populate that field — never passed in by callers.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from mlteam.contracts import (
     BaselineDelta,
     CalibrationSummary,
@@ -14,6 +16,7 @@ from mlteam.contracts import (
     DecisionThreshold,
     EvaluationReport,
     TaskType,
+    is_classification,
     new_artifact,
 )
 from mlteam.evaluation.calibration import compute_calibration
@@ -31,6 +34,14 @@ from mlteam.evaluation.stats import (
 )
 from mlteam.evaluation.thresholds import cost_optimal_threshold
 from mlteam.store.guard import GuardedArtifactStore
+
+if TYPE_CHECKING:
+    # mlteam.orchestration imports THIS module (agentic.py -> evaluation.report),
+    # so importing mlteam.orchestration.progress at runtime here would be
+    # circular -- ProgressReporter is only ever used as a type annotation,
+    # and `from __future__ import annotations` means annotations are never
+    # evaluated at runtime, so a TYPE_CHECKING-only import is sufficient.
+    from mlteam.orchestration.progress import ProgressReporter
 
 # Fallback heuristic significance threshold, used ONLY when a real paired
 # test cannot be run (fold counts differ between model and baseline, or
@@ -130,11 +141,27 @@ def _calibration_and_threshold(
     cost_asymmetry: CostAsymmetry | None,
     n_folds: int,
     seed: int,
+    reporter: ProgressReporter | None = None,
 ) -> tuple[CalibrationSummary, DecisionThreshold | None]:
     """Best-effort: an OOF refit failing (e.g. unsupported task type, or the
     template lacks predict_proba) must never break report building — the
     rest of the EvaluationReport is far more load-bearing than these two
-    fields, so log and return empty/None rather than raise."""
+    fields, so log and return empty/None rather than raise.
+
+    Skips the OOF refit entirely for non-classification tasks. Before this
+    guard existed, a live regression run paid the FULL cost of refitting
+    the winning model per fold here -- a 5-base-learner stacking ensemble,
+    5 folds, 187k rows, ~25 silent minutes -- only to discover afterward
+    that ``oof.y_proba is None`` (regression predictions have no positive-
+    class probability) and discard the entire result. Calibration and
+    decision thresholds are meaningful only for probabilistic classifiers;
+    checking that analytically before refitting, rather than after, turns
+    a wasted expensive computation into a no-op for every regression and
+    forecasting run.
+    """
+    if not is_classification(task_type):
+        return CalibrationSummary(), None
+
     # Deferred import: evaluation.oof -> agents.trainer/data_io ->
     # agents.__init__ -> agents.deployer -> orchestration.gates ->
     # orchestration.__init__ -> orchestration.agentic -> evaluation.report,
@@ -150,6 +177,7 @@ def _calibration_and_threshold(
             task_type=task_type,
             seed=seed,
             n_folds=n_folds,
+            reporter=reporter,
         )
     except Exception:  # noqa: BLE001 - best-effort, never blocks the report
         return CalibrationSummary(), None
@@ -199,6 +227,7 @@ def build_evaluation_report(
     cost_asymmetry: CostAsymmetry | None = None,
     n_folds: int = 5,
     seed: int = 42,
+    reporter: ProgressReporter | None = None,
 ) -> EvaluationReport:
     """Assemble and store the EvaluationReport for the selected model.
 
@@ -209,13 +238,21 @@ def build_evaluation_report(
     the documented pooled-std heuristic instead — see BaselineDelta's
     ``significance_method`` field for which path was taken.
 
-    ``dataset_id``/``task_type`` (when both given, for a binary
-    classification task with a probabilistic template) drive an out-of-fold
-    refit that measures REAL calibration (Brier/ECE) instead of the
-    permanently-empty CalibrationSummary this used to always ship, and — when
+    ``dataset_id``/``task_type`` (when both given AND the task is
+    classification) drive an out-of-fold refit that measures REAL
+    calibration (Brier/ECE) instead of the permanently-empty
+    CalibrationSummary this used to always ship, and — when
     ``cost_asymmetry`` is also given — the cost-optimal decision threshold
     for the business's stated false-positive/false-negative cost ratio. Both
     are omitted (not a vacuous pass) when the prerequisites aren't met.
+    Non-classification tasks skip the refit entirely rather than running it
+    and discarding the result -- see ``_calibration_and_threshold``.
+
+    ``reporter``, if given, receives one log line per CV fold as the OOF
+    refit progresses (classification tasks only, since that's the only case
+    where the refit actually runs) -- this stage previously refit the
+    winning model with zero visible progress for however long the refit
+    took.
     """
     primary = model_result.metrics.get(primary_metric)
     if primary is None:
@@ -239,6 +276,7 @@ def build_evaluation_report(
             cost_asymmetry=cost_asymmetry,
             n_folds=n_folds,
             seed=seed,
+            reporter=reporter,
         )
 
     report = new_artifact(

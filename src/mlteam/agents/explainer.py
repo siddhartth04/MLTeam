@@ -18,7 +18,7 @@ work already paid for.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import polars as pl
@@ -48,6 +48,16 @@ from mlteam.reporting.figures import (
 )
 from mlteam.serving.model_io import load_pipeline
 from mlteam.store.interface import ArtifactStore
+
+if TYPE_CHECKING:
+    # mlteam.agents.__init__ imports THIS module, and mlteam.orchestration's
+    # own import chain reaches back into mlteam.agents (agents.deployer ->
+    # orchestration.gates -> orchestration.__init__) -- a top-level import of
+    # orchestration.progress here would be circular. ProgressReporter is
+    # only ever used as a type annotation, and `from __future__ import
+    # annotations` means annotations are never evaluated at runtime, so a
+    # TYPE_CHECKING-only import is sufficient.
+    from mlteam.orchestration.progress import ProgressReporter
 
 _log = structlog.get_logger(__name__)
 
@@ -247,6 +257,7 @@ def explain_model(
     primary_metric: str,
     n_folds: int = 5,
     seed: int = 42,
+    reporter: ProgressReporter | None = None,
 ) -> ExplainabilityReport:
     """Compute importances + effect figures and store an ExplainabilityReport.
 
@@ -258,6 +269,12 @@ def explain_model(
     the final all-data-fit model directly: both describe the FITTED MODEL's
     behavior/attributions on realistic input values, not an out-of-sample
     performance estimate, so there is no equivalent leakage concern for them.
+
+    ``reporter``, if given, logs one line per CV fold as the OOF refit
+    progresses — a single house-prices run spent 45+ silent minutes here
+    refitting a 5-base-learner stacking ensemble across 5 folds on 187k
+    rows, with the dashboard showing no distinction between "working" and
+    "hung" for the entire stretch.
     """
     task_is_classification = is_classification(task_type)
     dataset = store.get(train_dataset_id)
@@ -289,6 +306,8 @@ def explain_model(
         task_type=task_type,
         seed=seed,
         n_folds=n_folds,
+        reporter=reporter,
+        reporter_stage="explain",
     )
     importances = _oof_permutation_importance(oof, scorer=scorer, seed=seed)
 

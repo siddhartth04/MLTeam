@@ -99,6 +99,7 @@ def run_iterative_pipeline(
     client: LLMClient,
     gate: ApprovalGate,
     budget: RunBudget | None = None,
+    run_id: str | None = None,
     seed: int = 42,
     holdout_fraction: float = 0.2,
     n_folds: int = 5,
@@ -107,7 +108,19 @@ def run_iterative_pipeline(
     mlflow_enabled: bool = False,
     reporter: ProgressReporter = NULL_REPORTER,
 ) -> IterativeResult:
-    """Full loop: agentic head, then critique-driven improvement under budget."""
+    """Full loop: agentic head, then critique-driven improvement under budget.
+
+    ``run_id``, when given, is passed straight through to
+    ``run_agentic_pipeline`` instead of letting it mint its own via
+    ``new_run_id()``. This lets a caller (the API's run_manager) generate
+    the pipeline run id BEFORE calling this function and register it with
+    the dashboard immediately -- previously the pipeline's own run id was
+    only learnable from ``IterativeResult.initial.run_id`` after this
+    entire call returned, so experiments/lineage/artifacts were unresolvable
+    (correctly returning empty/pending, per Task 1 of
+    REPORT_INTEGRITY_ROADMAP.md, rather than leaking) for a run's ENTIRE
+    in-flight duration -- often over an hour for a large dataset.
+    """
     budget = budget or RunBudget()
     tracker = BudgetTracker(budget, client)
 
@@ -117,6 +130,7 @@ def run_iterative_pipeline(
         goal_text=goal_text,
         client=client,
         gate=gate,
+        run_id=run_id,
         seed=seed,
         holdout_fraction=holdout_fraction,
         n_folds=n_folds,
@@ -244,6 +258,7 @@ def run_iterative_pipeline(
                 n_folds=n_folds,
                 env_hash=env_hash,
                 mlflow_enabled=mlflow_enabled,
+                reporter=reporter,
             )
             results.update(revised_results)
             new_ids.extend(revised_results)
@@ -265,6 +280,7 @@ def run_iterative_pipeline(
             cost_asymmetry=spec.cost_asymmetry,
             n_folds=n_folds,
             seed=seed,
+            reporter=reporter,
         )
         # No terminal-state audit here: the "planned" set is this iteration's
         # dynamically-revised candidates, not a fixed plan to check completeness

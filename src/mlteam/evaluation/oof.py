@@ -13,7 +13,7 @@ CV pass reusing the exact same fold assignment training used.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -22,6 +22,9 @@ from mlteam.agents.trainer import _column_roles, _make_cv, _temporal_to_epoch
 from mlteam.contracts import TaskType
 from mlteam.store.interface import ArtifactStore
 from mlteam.templates.registry import get_template
+
+if TYPE_CHECKING:
+    from mlteam.orchestration.progress import ProgressReporter
 
 
 @dataclass(frozen=True)
@@ -54,12 +57,27 @@ def compute_oof(
     task_type: TaskType,
     seed: int,
     n_folds: int,
+    reporter: ProgressReporter | None = None,
+    reporter_stage: str = "evaluate",
 ) -> OOFResult:
     """Refit the template per fold (same CV split training used) and
     collect out-of-fold predictions. This is NOT the trained model's CV
     metrics recomputed — it is genuinely out-of-sample predictions for
     EVERY row, usable for permutation importance, residual analysis, and
-    calibration without a second holdout."""
+    calibration without a second holdout.
+
+    ``reporter``, if given, logs one line per fold refit, tagged with
+    ``reporter_stage`` (this function is called from BOTH the "evaluate"
+    stage's calibration refit and the "explain" stage's permutation-
+    importance refit -- callers must say which one they are so the
+    dashboard doesn't attribute an explainability log line to evaluation).
+    A single house-prices run's explainability stage spent 45+ silent
+    minutes here refitting a 5-base-learner stacking ensemble across 5
+    folds on 187k rows, with nothing distinguishing "working" from "hung"
+    on the dashboard -- each fold can legitimately take minutes for an
+    expensive template, so per-fold visibility (not just a start/end
+    message) is what actually answers "is this still making progress".
+    """
     from sklearn.base import clone
 
     dataset = store.get(dataset_id)
@@ -83,7 +101,13 @@ def compute_oof(
 
     fold_pipelines: list[Any] = []
     fold_test_indices: list[np.ndarray] = []
-    for train_idx, test_idx in cv.split(frame, target):
+    for fold_index, (train_idx, test_idx) in enumerate(cv.split(frame, target), start=1):
+        if reporter is not None:
+            reporter.log(
+                f"OOF refit: fold {fold_index}/{n_folds} for {template_id} starting "
+                f"({len(train_idx)} train rows)...",
+                stage=reporter_stage,
+            )
         fitted = clone(base_pipeline).fit(frame.iloc[train_idx], target.iloc[train_idx])
         preds = fitted.predict(frame.iloc[test_idx])
         y_pred[test_idx] = preds
@@ -93,6 +117,11 @@ def compute_oof(
                 y_proba[test_idx] = proba[:, 1]
         fold_pipelines.append(fitted)
         fold_test_indices.append(test_idx)
+        if reporter is not None:
+            reporter.log(
+                f"OOF refit: fold {fold_index}/{n_folds} for {template_id} complete",
+                stage=reporter_stage,
+            )
 
     return OOFResult(
         y_true=target.to_numpy(),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -112,3 +113,207 @@ def test_budget_exhaustion_stops_loop(tmp_path):
     assert "iteration budget" in result.stop_reason
     assert len(result.iterations) == 1
     assert result.final_critique.verdict is Verdict.ITERATE
+
+
+# -- JUDGMENT_ROADMAP.md Task 4: evidence-cited revisions + stop verb -------
+# revise_experiment_plan unit-tested directly (same pattern as
+# test_critic_field_evidence.py/test_decision_records.py) -- faster and more
+# targeted than a full run_iterative_pipeline fixture for scenarios that are
+# really about revise_experiment_plan's own grounding/stop behavior.
+
+
+def _revision_client(*texts: str):
+    from mlteam.llm import FixtureTransport, LLMClient
+
+    return LLMClient(FixtureTransport.from_texts(*texts), model="claude-sonnet-4-6")
+
+
+def _problem_spec():
+    from mlteam.contracts import ProblemSpec, TaskType, new_artifact
+
+    return new_artifact(
+        ProblemSpec,
+        producer_agent="test",
+        run_id="test-revision",
+        task_type=TaskType.BINARY_CLASSIFICATION,
+        target_column="churned",
+        primary_metric="roc_auc",
+    )
+
+
+def test_revision_drops_experiment_citing_nonexistent_id():
+    """A cited experiment_id that isn't in this run's results must be
+    dropped with a warning -- the run continues with whatever remains,
+    not a hard failure of the whole revision."""
+    from mlteam.agents.experiment_planner import revise_experiment_plan
+
+    client = _revision_client(
+        json.dumps(
+            {
+                "experiments": [
+                    {
+                        "experiment_id": "exp-ghost",
+                        "template_id": "lightgbm_default",
+                        "config": {},
+                        "cited_experiment_ids": ["exp-that-never-ran"],
+                        "rationale": "addresses the capacity finding",
+                    },
+                    {
+                        "experiment_id": "exp-real",
+                        "template_id": "lightgbm_default",
+                        "config": {"n_estimators": 50},
+                        "cited_experiment_ids": ["exp-lgbm"],
+                        "rationale": "builds on exp-lgbm per the capacity finding",
+                    },
+                ],
+                "rationale": "two candidates addressing capacity",
+            }
+        )
+    )
+    result = revise_experiment_plan(
+        client,
+        problem=_problem_spec(),
+        critique_actions=("increase model capacity",),
+        prior_results=[],
+        prior_experiment_ids={"exp-dummy", "exp-lgbm"},
+        n_rows=500,
+    )
+    ids = {s.experiment_id for s in result.specs}
+    assert ids == {"exp-real"}
+    assert result.stop is False
+
+
+def test_revision_drops_experiment_with_no_citation_at_all():
+    """No cited_experiment_ids AND no cited_finding_categories -- ungrounded,
+    dropped regardless of how plausible the free-text rationale reads."""
+    from mlteam.agents.experiment_planner import revise_experiment_plan
+
+    client = _revision_client(
+        json.dumps(
+            {
+                "experiments": [
+                    {
+                        "experiment_id": "exp-unfounded",
+                        "template_id": "lightgbm_default",
+                        "config": {},
+                        "rationale": "this sounds like a good idea",
+                    }
+                ],
+                "rationale": "one candidate",
+            }
+        )
+    )
+    result = revise_experiment_plan(
+        client,
+        problem=_problem_spec(),
+        critique_actions=("increase model capacity",),
+        prior_results=[],
+        prior_experiment_ids={"exp-dummy", "exp-lgbm"},
+        n_rows=500,
+    )
+    assert result.specs == ()
+
+
+def test_revision_stop_true_ends_the_loop_with_reason():
+    """The explicit stop verb: zero experiments, stop=true, a concrete
+    reason -- the caller (run_iterative_pipeline) must break on this."""
+    from mlteam.agents.experiment_planner import revise_experiment_plan
+
+    client = _revision_client(
+        json.dumps(
+            {
+                "experiments": [],
+                "rationale": "no viable candidates remain",
+                "stop": True,
+                "stop_reason": "last two iterations moved roc_auc by <0.001; further tuning "
+                "unlikely to help",
+            }
+        )
+    )
+    result = revise_experiment_plan(
+        client,
+        problem=_problem_spec(),
+        critique_actions=("increase model capacity",),
+        prior_results=[],
+        prior_experiment_ids={"exp-dummy", "exp-lgbm"},
+        n_rows=500,
+    )
+    assert result.specs == ()
+    assert result.stop is True
+    assert "further tuning unlikely to help" in result.stop_reason
+
+
+def test_revision_target_transform_carries_through_to_training(guarded_store):
+    """A revision that sets target_transform="log1p" on a new spec must
+    produce a TrainedModel that actually carries it -- ties Task 2's
+    wrap_target_transform plumbing to the iteration loop, not just to
+    revise_experiment_plan's own return value."""
+    import numpy as np
+    import polars as pl
+
+    from mlteam.agents.data_io import store_dataframe
+    from mlteam.agents.experiment_planner import revise_experiment_plan
+    from mlteam.agents.trainer import compute_env_hash, train_experiment
+    from mlteam.contracts import DatasetRole, ProblemSpec, TaskType, new_artifact
+
+    rng = np.random.default_rng(42)
+    n = 200
+    x = rng.uniform(1, 10, n)
+    price = np.expm1(2.0 + 0.3 * x + rng.normal(0, 0.2, n))
+    df = pl.DataFrame({"feature": x, "price": price})
+    dataset = store_dataframe(
+        guarded_store,
+        df,
+        role=DatasetRole.TRAIN,
+        producer_agent="test",
+        run_id="test-revision-transform",
+        target_column="price",
+    )
+
+    problem = new_artifact(
+        ProblemSpec,
+        producer_agent="test",
+        run_id="test-revision-transform",
+        task_type=TaskType.REGRESSION,
+        target_column="price",
+        primary_metric="mae",
+    )
+    client = _revision_client(
+        json.dumps(
+            {
+                "experiments": [
+                    {
+                        "experiment_id": "exp-log1p-rev",
+                        "template_id": "lightgbm_default",
+                        "config": {"n_estimators": 30},
+                        "target_transform": "log1p",
+                        "cited_experiment_ids": ["exp-lgbm"],
+                        "rationale": "profile flagged target_transform_recommended",
+                    }
+                ],
+                "rationale": "apply the recommended log1p transform",
+            }
+        )
+    )
+    result = revise_experiment_plan(
+        client,
+        problem=problem,
+        critique_actions=("apply target transform",),
+        prior_results=[],
+        prior_experiment_ids={"exp-lgbm"},
+        n_rows=n,
+    )
+    assert len(result.specs) == 1
+    assert result.specs[0].target_transform == "log1p"
+
+    train_result = train_experiment(
+        guarded_store,
+        dataset.meta.artifact_id,
+        result.specs[0],
+        task_type=TaskType.REGRESSION,
+        run_id="test-revision-transform",
+        seed=42,
+        n_folds=3,
+        env_hash=compute_env_hash(),
+    )
+    assert train_result.model.target_transform == "log1p"

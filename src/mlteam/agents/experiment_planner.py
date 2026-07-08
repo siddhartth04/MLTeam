@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+import structlog
 from pydantic import BaseModel, Field
 
 from mlteam.contracts import (
@@ -30,6 +31,8 @@ from mlteam.llm.summaries import profile_summary
 from mlteam.store.interface import ArtifactStore
 from mlteam.store.ledger import matching_priors
 from mlteam.templates.registry import get_template, list_templates
+
+_log = structlog.get_logger(__name__)
 
 SYSTEM_PROMPT = """You are the Experiment Planner of an autonomous ML engineering \
 team. Select which vetted pipeline templates to train and with what config.
@@ -225,23 +228,54 @@ engineering team, revising the plan after a Critic verdict of \
 iterate_with_actions.
 
 Rules:
-- Propose 1-3 NEW candidate experiments that concretely address the Critic's \
+- Propose 0-3 NEW candidate experiments that concretely address the Critic's \
 actions. Do not repeat an experiment_id or an identical config that was \
-already trained.
-- template_id must come from the registry list; is_baseline must be false \
-(baselines already exist).
+already trained. Zero is a valid answer — see the stop verb below.
+- template_id must come from the registry list (revisions are never baselines — \
+those already exist).
 - config keys must be valid model constructor parameters. Ground every choice \
 in the critique actions and prior results.
 - target_transform="log1p" may be set for a REGRESSION task when the Critic's \
-actions or prior results point at a skewed target (e.g. a raw-scale MAE dominated \
-by a few large values); never for a non-regression task.
-- rationale must say which critique action each experiment addresses.
+actions, prior results, or slice_metrics point at a skewed target (e.g. a \
+raw-scale MAE dominated by a few large values); never for a non-regression task.
+- GROUNDING (enforced in code, not just this prompt): every experiment must cite \
+at least one prior experiment_id (in cited_experiment_ids) or finding category \
+(in cited_finding_categories, from fitness_findings/leakage_checks/slice_metrics) \
+that motivated it. An experiment with no citation, or one citing an \
+experiment_id that does not exist in this run, is DROPPED before training — \
+propose it anyway only if you can actually name what motivated it.
+- rationale must say in words which critique action, slice, or finding each \
+experiment addresses — the citations above are the enforced, structured version \
+of this same claim.
+- STOP VERB: if further experiments are unlikely to move the primary metric \
+meaningfully (e.g. the last two iterations barely moved it, the gap to the \
+runner-up is already small, or every remaining critique action was already \
+tried and did not help), set stop=true and give a concrete stop_reason instead \
+of proposing more experiments. Do not stop merely because the critic has not \
+yet said approve — stop only when you judge that MORE experiments specifically \
+would not help.
 Return only JSON matching the schema."""
 
 
-class RevisionDraft(BaseModel):
-    experiments: list[ExperimentDraft] = Field(min_length=1, max_length=3)
+class RevisionExperimentDraft(BaseModel):
+    """Distinct from ExperimentDraft (the initial-plan schema): revisions are
+    never baselines and must cite their evidence, which the initial plan
+    (covered by excluded_templates/reasoning instead) does not require."""
+
+    experiment_id: str
+    template_id: str
+    config: ModelConfigDraft = Field(default_factory=ModelConfigDraft)
+    target_transform: Literal["log1p"] | None = None
+    cited_experiment_ids: list[str] = Field(default_factory=list)
+    cited_finding_categories: list[str] = Field(default_factory=list)
     rationale: str
+
+
+class RevisionDraft(BaseModel):
+    experiments: list[RevisionExperimentDraft] = Field(default_factory=list, max_length=3)
+    rationale: str
+    stop: bool = False
+    stop_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -252,6 +286,50 @@ class RevisionResult:
 
     specs: tuple[ExperimentSpec, ...]
     rationale: str
+    stop: bool = False
+    stop_reason: str = ""
+
+
+def _ground_revision_experiments(
+    experiments: list[RevisionExperimentDraft],
+    prior_experiment_ids: set[str],
+    valid_finding_categories: set[str],
+) -> list[RevisionExperimentDraft]:
+    """Grounding rule enforced in code, not trusted from the prompt alone
+    (JUDGMENT_ROADMAP.md Task 4): drop — loudly, existing convention, see
+    agents/feature_executor.py's dropped_proposals — any experiment citing
+    no prior evidence at all, or citing an experiment_id that does not
+    exist in this run. The rest of the revision proceeds; one bad proposal
+    must never sink the others."""
+    accepted = []
+    for exp in experiments:
+        if not exp.cited_experiment_ids and not exp.cited_finding_categories:
+            _log.warning(
+                "revision_experiment_dropped",
+                experiment_id=exp.experiment_id,
+                reason="no citation of a prior experiment_id or finding category",
+            )
+            continue
+        unknown_ids = [eid for eid in exp.cited_experiment_ids if eid not in prior_experiment_ids]
+        if unknown_ids:
+            _log.warning(
+                "revision_experiment_dropped",
+                experiment_id=exp.experiment_id,
+                reason=f"cites unknown experiment_id(s): {unknown_ids}",
+            )
+            continue
+        unknown_categories = [
+            c for c in exp.cited_finding_categories if c not in valid_finding_categories
+        ]
+        if exp.cited_finding_categories and unknown_categories and not exp.cited_experiment_ids:
+            _log.warning(
+                "revision_experiment_dropped",
+                experiment_id=exp.experiment_id,
+                reason=f"cites unknown finding category(ies): {unknown_categories}",
+            )
+            continue
+        accepted.append(exp)
+    return accepted
 
 
 def revise_experiment_plan(
@@ -262,13 +340,27 @@ def revise_experiment_plan(
     prior_results: list[dict[str, Any]],
     prior_experiment_ids: set[str],
     n_rows: int,
+    slice_metrics: list[dict[str, Any]] | None = None,
+    leakage_checks: list[dict[str, Any]] | None = None,
+    fitness_findings: list[dict[str, Any]] | None = None,
 ) -> RevisionResult:
-    """Ask the planner for 1-3 new candidates addressing the critique."""
+    """Ask the planner for 0-3 new candidates addressing the critique, or an
+    explicit stop.
+
+    ``slice_metrics``/``leakage_checks``/``fitness_findings``, when given,
+    are the evidence that already exists at iteration time (JUDGMENT_
+    ROADMAP.md Task 4) — deliberately NOT a fresh OOF computation for
+    regression (that cost was removed 2026-07-08); these are read straight
+    off the EvaluationReport/CritiqueReport the caller already built.
+    """
     registry = [
         {"template_id": t.template_id, "description": t.description}
         for t in list_templates(problem.task_type)
     ]
     registry_ids = {entry["template_id"] for entry in registry}
+    valid_finding_categories = {f["category"] for f in (fitness_findings or [])} | {
+        c["name"] for c in (leakage_checks or [])
+    }
 
     def _post_validate(draft: RevisionDraft) -> None:
         for exp in draft.experiments:
@@ -282,8 +374,6 @@ def revise_experiment_plan(
                     f"experiment_id '{exp.experiment_id}' was already used; "
                     "pick a new id for the revised experiment"
                 )
-            if exp.is_baseline:
-                raise ValueError("revision experiments must have is_baseline=false")
             if exp.target_transform is not None and problem.task_type is not TaskType.REGRESSION:
                 raise ValueError(
                     f"target_transform is only valid for regression; "
@@ -298,9 +388,15 @@ def revise_experiment_plan(
             "prior_results": prior_results,
             "template_registry": registry,
             "used_experiment_ids": sorted(prior_experiment_ids),
+            "slice_metrics": slice_metrics or [],
+            "leakage_checks": leakage_checks or [],
+            "fitness_findings": fitness_findings or [],
         },
         schema=RevisionDraft,
         post_validate=_post_validate,
+    )
+    accepted = _ground_revision_experiments(
+        result.output.experiments, prior_experiment_ids, valid_finding_categories
     )
     return RevisionResult(
         specs=tuple(
@@ -312,9 +408,11 @@ def revise_experiment_plan(
                 is_baseline=False,
                 target_transform=e.target_transform,
             )
-            for e in result.output.experiments
+            for e in accepted
         ),
         rationale=result.output.rationale,
+        stop=result.output.stop,
+        stop_reason=result.output.stop_reason,
     )
 
 

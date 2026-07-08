@@ -181,10 +181,14 @@
             "learning_rate": 0.06,
             "reg_lambda": 1.0
           },
-          "is_baseline": false
+          "cited_experiment_ids": ["exp-lgbm-default"],
+          "cited_finding_categories": ["capacity"],
+          "rationale": "addresses 'more estimators + regularization' from the critique's capacity finding, built on exp-lgbm-default"
         }
       ],
-      "rationale": "addresses 'more estimators + regularization' from the critique"
+      "rationale": "addresses 'more estimators + regularization' from the critique",
+      "stop": false,
+      "stop_reason": ""
     },
     "usage": {
       "input_tokens": 1300,

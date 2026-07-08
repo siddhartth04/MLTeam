@@ -48,6 +48,10 @@ class IterationRecord:
     verdict: Verdict
     best_experiment_id: str
     new_experiment_ids: tuple[str, ...]
+    # Set when the planner's revision judged further experiments not
+    # worthwhile (JUDGMENT_ROADMAP.md Task 4's stop verb) -- empty
+    # otherwise, incl. every iteration recorded before this field existed.
+    stop_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -239,7 +243,12 @@ def run_iterative_pipeline(
                     hint="HPO retrain failed; continuing without it this iteration",
                 )
 
-        # (b) LLM plan revision addressing the critique actions.
+        # (b) LLM plan revision addressing the critique actions. ``report``/
+        # ``critique`` here are still the PREVIOUS iteration's (or initial's)
+        # -- exactly the evidence that existed at the start of this iteration,
+        # read straight off the artifacts rather than a fresh computation
+        # (no new OOF pass for regression; that cost was removed 2026-07-08).
+        revision_stop, revision_stop_reason = False, ""
         try:
             revision = revise_experiment_plan(
                 client,
@@ -248,7 +257,25 @@ def run_iterative_pipeline(
                 prior_results=_results_summary(results, primary),
                 prior_experiment_ids=set(results),
                 n_rows=store.get(dataset_id).n_rows,
+                slice_metrics=[
+                    {"slice_name": s.slice_name, "n_rows": s.n_rows, "metrics": s.metrics}
+                    for s in report.slice_metrics
+                ],
+                leakage_checks=[
+                    {"name": c.name, "passed": c.passed, "details": c.details}
+                    for c in report.leakage_checks
+                ],
+                fitness_findings=[
+                    {
+                        "category": f.category,
+                        "evidence": f.evidence,
+                        "recommendation": f.recommendation,
+                    }
+                    for f in critique.findings
+                    if f.category == "fitness_for_purpose"
+                ],
             )
+            revision_stop, revision_stop_reason = revision.stop, revision.stop_reason
             revised_results, _ = _train_all(
                 store,
                 dataset_id,
@@ -308,6 +335,7 @@ def run_iterative_pipeline(
                 verdict=critique.verdict,
                 best_experiment_id=best_now,
                 new_experiment_ids=tuple(new_ids),
+                stop_reason=revision_stop_reason if revision_stop else "",
             )
         )
         _log.info(
@@ -320,6 +348,18 @@ def run_iterative_pipeline(
             f"Iteration {iteration} finished: {critique.verdict.value} (best: {best_now})",
             stage="iterate",
         )
+        if revision_stop:
+            # Explicit stop verb (JUDGMENT_ROADMAP.md Task 4): the planner
+            # judged further experiments not worthwhile. Distinct from
+            # budget_exhausted/critic verdicts -- this is the model choosing
+            # to stop, not being forced to.
+            status = "stopped_by_model"
+            stop_reason = (
+                revision_stop_reason or "planner judged further experiments not worthwhile"
+            )
+            _log.info("iteration_stopped_by_model", index=iteration, reason=stop_reason)
+            reporter.stage("iterate", "done", detail=stop_reason)
+            break
 
     final_best = _best_key(results, primary, dummy_key)
     return IterativeResult(

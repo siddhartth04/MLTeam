@@ -24,8 +24,6 @@ that hold a store should run in addition to ``validate_report_inputs``.
 
 from __future__ import annotations
 
-import re
-
 from mlteam.contracts import TaskType, is_classification
 from mlteam.evaluation.metrics import scoring_for
 from mlteam.reporting.builder import ReportInputs
@@ -187,30 +185,47 @@ def validate_run_membership(
         raise ReportContractError(violations)
 
 
-def lint_report_html(html: str, *, task_type: TaskType, primary_metric: str) -> None:
-    """Scan RENDERED report HTML for wrong-task-type metric vocabulary.
+def lint_rendered_metric_names(
+    metric_names: list[str], *, task_type: TaskType, primary_metric: str
+) -> None:
+    """Check the METRIC NAMES that actually got rendered into a report's
+    tables/cards against the task type's legal set.
 
-    Defense-in-depth for Task 2's input-level checks: catches contamination
-    introduced by a future template edit or an LLM-narrated insight, matched
-    at the render layer regardless of how it got there. Matches metric-name
-    TOKENS only (``roc_auc``, ``rmse``, ...) -- never prose words like
-    "calibration", since the technical template legitimately prints a
-    Calibration section header with "Not measured for this run." on a
-    regression report.
+    Defense-in-depth for Task 2's ``validate_report_inputs``: catches a
+    future template change that renders a metric name from somewhere Task 2
+    doesn't inspect (e.g. a new template section reading a differently-named
+    field). ``metric_names`` must be the literal list of metric-name strings
+    the template actually iterated over (headline card labels, CV/holdout
+    table rows, baseline-delta rows) -- never raw page HTML.
+
+    An earlier version of this function scanned the full rendered HTML for
+    forbidden tokens as whole words. That approach shipped a false positive
+    to production the first time it ran against a real regression report:
+    the LLM-narrated insight text legitimately used the English word
+    "accuracy" ("prioritizing prediction accuracy for negotiation"), which
+    is indistinguishable from the classification metric under a word-
+    boundary regex, and the run failed at the final report step after a
+    successful two-hour pipeline. Free-text narration (insight findings/
+    caveats, critic evidence/recommendations) is written in plain English by
+    an LLM and WILL contain ordinary English words that collide with metric
+    names ("accuracy", conceivably "recall", "support") without meaning the
+    metric -- there is no regex that can tell prose from data. Checking the
+    actual metric-name values a template rendered, rather than pattern-
+    matching the whole page, closes that hole by construction: prose is
+    simply never in the input list.
     """
     allowed = ALLOWED_METRICS[task_type]
     forbidden = _ALL_METRICS - allowed
-    lowered = html.lower()
 
     violations = [
-        f"report for task type {task_type.value} contains forbidden metric token "
-        f"'{token}' (legal only for other task types)"
-        for token in sorted(forbidden)
-        if re.search(rf"\b{re.escape(token)}\b", lowered)
+        f"report for task type {task_type.value} rendered forbidden metric "
+        f"'{name}' (legal only for other task types)"
+        for name in metric_names
+        if name in forbidden
     ]
-    if primary_metric.lower() not in lowered:
+    if metric_names and primary_metric not in metric_names:
         violations.append(
-            f"report does not mention its own primary_metric '{primary_metric}' anywhere"
+            f"report does not render its own primary_metric '{primary_metric}' anywhere"
         )
     if violations:
         raise ReportContractError(violations)

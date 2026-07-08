@@ -388,18 +388,31 @@ def build_final_report(
         },
     )
 
-    # Defense-in-depth (Task 3): re-check the RENDERED HTML for wrong-task
-    # vocabulary. validate_report_inputs already screens the inputs, but a
-    # future template edit or LLM-narrated insight text could still leak a
-    # metric name illegal for this task type -- catching it here means the
-    # failure is caught regardless of how it got introduced, not just at
-    # the one input shape Task 2 knows to check.
-    from mlteam.reporting.contract import lint_report_html
+    # Defense-in-depth (Task 3): re-check the metric NAMES that actually got
+    # rendered into the report's tables/cards against the task type's legal
+    # set. validate_report_inputs already screens inputs.evaluation directly,
+    # but this additionally catches a future template change that renders a
+    # metric name from a field Task 2 doesn't inspect. Deliberately checks
+    # the structured name lists below, never the rendered HTML page: an
+    # earlier version scanned full HTML for forbidden tokens as whole words
+    # and shipped a false positive the first time it ran against a real
+    # report, because the LLM-narrated insight text used the ordinary
+    # English word "accuracy" in its plain-English sense -- free-text
+    # narration will contain words that collide with metric names without
+    # meaning the metric, and no regex over prose can tell the difference.
+    from mlteam.reporting.contract import lint_rendered_metric_names
 
-    task_type = inputs.problem.task_type
-    primary_metric = inputs.problem.primary_metric
-    lint_report_html(business_html, task_type=task_type, primary_metric=primary_metric)
-    lint_report_html(technical_html, task_type=task_type, primary_metric=primary_metric)
+    rendered_metric_names = (
+        [m["label"] for m in headline_cards]
+        + [m.name for m in inputs.evaluation.cv_metrics]
+        + [m["name"] for m in holdout_metrics]
+        + [d.metric for d in inputs.evaluation.baseline_deltas]
+    )
+    lint_rendered_metric_names(
+        rendered_metric_names,
+        task_type=inputs.problem.task_type,
+        primary_metric=inputs.problem.primary_metric,
+    )
 
     business_blob = store.put_blob(business_html.encode("utf-8"))
     technical_blob = store.put_blob(technical_html.encode("utf-8"))

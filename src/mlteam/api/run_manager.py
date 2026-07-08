@@ -191,7 +191,7 @@ def _execute(
     # Imported here to keep module import light and avoid heavy deps at import.
     from mlteam.agents.deployer import build_deployment_bundle
     from mlteam.agents.explainer import explain_model
-    from mlteam.orchestration import run_iterative_pipeline
+    from mlteam.orchestration import new_run_id, run_iterative_pipeline
     from mlteam.orchestration.budget import RunBudget
     from mlteam.reporting import ReportInputs, build_final_report
 
@@ -200,6 +200,16 @@ def _execute(
     client = LLMClient(transport, model=model, trace=None)
     registry.set_status(ui_run_id, RunStatus.RUNNING)
     reporter: ProgressReporter = RegistryReporter(registry, ui_run_id, client)
+
+    # Minted HERE, before the pipeline runs, and registered immediately --
+    # not learned from IterativeResult.initial.run_id after the entire
+    # pipeline returns. Previously result_run_id stayed None (correctly
+    # returning empty/pending per Task 1 of REPORT_INTEGRITY_ROADMAP.md,
+    # never a cross-run leak) for a run's ENTIRE in-flight duration, often
+    # over an hour for a large dataset -- experiments/lineage/artifacts
+    # were unresolvable the whole time a run was actually progressing.
+    pipeline_run_id = new_run_id()
+    registry.set_result_run_id(ui_run_id, pipeline_run_id)
 
     def stage(s: Stage, status: StageStatus, detail: str = "") -> None:
         registry.update_stage(ui_run_id, s, status, detail)
@@ -226,6 +236,7 @@ def _execute(
             client=client,
             gate=gate,
             budget=RunBudget(max_iterations=max_iterations, max_llm_cost_usd=max_llm_cost_usd),
+            run_id=pipeline_run_id,
             seed=seed,
             n_folds=n_folds,
             hpo_trials=hpo_trials,
@@ -256,6 +267,7 @@ def _execute(
             n_folds=n_folds,
             run_id=result.initial.run_id,
             seed=seed,
+            reporter=reporter,
         )
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")
         note("Explainability figures generated", level="success", s=Stage.EXPLAIN)
@@ -345,7 +357,10 @@ def _execute(
 
         _record_ledger_outcome(store, spec=spec, pipeline=pipeline, best_model=best_model)
 
-        registry.set_result_run_id(ui_run_id, result.initial.run_id)
+        # result_run_id was already set at launch (pipeline_run_id, above);
+        # run_agentic_pipeline's `run_id = run_id or new_run_id()` means
+        # result.initial.run_id is guaranteed identical since a non-empty
+        # run_id was passed in -- no second write needed here.
         registry.finish(
             ui_run_id, status=RunStatus.COMPLETED, final_report_id=report.meta.artifact_id
         )

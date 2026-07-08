@@ -548,6 +548,63 @@ def test_api_settings_respects_env_override(monkeypatch):
     assert settings.max_llm_cost_usd == 1.5
 
 
+def test_result_run_id_is_set_before_the_pipeline_runs_not_after(tmp_path, monkeypatch):
+    """The pipeline's own run id is minted and registered with the dashboard
+    BEFORE run_iterative_pipeline is called, not learned from its return
+    value afterward. Previously result_run_id stayed None (correctly
+    returning empty/pending per Task 1 of REPORT_INTEGRITY_ROADMAP.md, never
+    a cross-run leak) for a run's ENTIRE in-flight duration -- meaning
+    /experiments, /lineage, and /artifacts were unresolvable for however
+    long a run took, often over an hour for a large dataset.
+
+    Verified by monkeypatching run_iterative_pipeline itself: the stub
+    inspects the registry from INSIDE the call, before doing any real work
+    and before returning, proving result_run_id was already set by the time
+    the pipeline function is invoked -- not a timing-dependent poll after
+    the fact.
+    """
+    import mlteam.api.run_manager as rm_module
+    import mlteam.orchestration as orchestration_module
+    from mlteam.api.registry import RunRegistry
+    from mlteam.llm import FixtureTransport
+
+    reg = RunRegistry()
+    ui_run_id = "run-early-id-test"
+    reg.create(ui_run_id, goal_text="predict something", dataset_name="d.csv")
+
+    observed: dict[str, object] = {}
+
+    def stub_run_iterative_pipeline(*_args, run_id=None, **_kwargs):
+        record = reg.get(ui_run_id)
+        observed["result_run_id_during_call"] = record.result_run_id
+        observed["run_id_passed_in"] = run_id
+        raise RuntimeError("stub stops here -- the test only needs pre-call state")
+
+    # _execute does `from mlteam.orchestration import ... run_iterative_pipeline`
+    # LOCALLY (a function-local import, re-resolved from this module's
+    # namespace on every call) -- patching it here, not on rm_module, is what
+    # the deferred import actually picks up.
+    monkeypatch.setattr(orchestration_module, "run_iterative_pipeline", stub_run_iterative_pipeline)
+
+    rm_module._execute(
+        ui_run_id=ui_run_id,
+        data_path=tmp_path / "d.csv",
+        goal_text="predict something",
+        transport=FixtureTransport.from_texts("{}"),
+        store_root=tmp_path / "store",
+        model="claude-sonnet-4-6",
+        seed=42,
+        n_folds=3,
+        hpo_trials=1,
+        max_iterations=1,
+        max_llm_cost_usd=1.0,
+        registry=reg,
+    )
+
+    assert observed["run_id_passed_in"] is not None
+    assert observed["result_run_id_during_call"] == observed["run_id_passed_in"]
+
+
 def test_launch_run_forwards_settings_to_the_pipeline_call(client, tmp_path, monkeypatch):
     """create_run must pass the configured evidence settings through to the
     actual pipeline invocation, not silently keep launch_run's own literals."""

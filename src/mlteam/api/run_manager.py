@@ -11,7 +11,7 @@ from __future__ import annotations
 import threading
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -26,7 +26,31 @@ from mlteam.orchestration.progress import ProgressReporter
 from mlteam.store import ArtifactStore, open_store
 from mlteam.store.ledger import record_outcome
 
+if TYPE_CHECKING:
+    from mlteam.agents.explainer import Effort
+    from mlteam.orchestration.iteration import IterativeResult
+
 _log = structlog.get_logger(__name__)
+
+
+def _explainability_effort(result: IterativeResult) -> tuple[Effort, str | None]:
+    """JUDGMENT_ROADMAP.md Task 6: don't spend full explainability compute
+    (SHAP/PDP) on a model that will not ship. Returns (effort, reason);
+    reason is None for full mode -- the caller logs it via reporter.log
+    so the user sees WHY the report is thinner, not just that it is."""
+    verdict = result.final_critique.verdict
+    if verdict is Verdict.HALT:
+        return "cheap", "critic verdict is HALT"
+    fitness_failed = any(
+        f.category == "fitness_for_purpose" for f in result.final_critique.findings
+    )
+    if result.status == "budget_exhausted" and verdict is Verdict.ITERATE and fitness_failed:
+        return (
+            "cheap",
+            "iteration budget exhausted with an unresolved fitness-for-purpose finding",
+        )
+    return "full", None
+
 
 _GATE_TO_STAGE = {
     GateName.PROBLEM_SPEC: Stage.GATE_SPEC,
@@ -261,6 +285,13 @@ def _execute(
 
         # Explainability.
         stage(Stage.EXPLAIN, StageStatus.ACTIVE)
+        effort, cheap_reason = _explainability_effort(result)
+        if cheap_reason is not None:
+            reporter.log(
+                f"Explainability running in cheap mode: {cheap_reason}",
+                level="warning",
+                stage=Stage.EXPLAIN.value,
+            )
         explain_report = explain_model(
             store,
             best_model,
@@ -270,6 +301,7 @@ def _execute(
             n_folds=n_folds,
             run_id=result.initial.run_id,
             seed=seed,
+            effort=effort,
             reporter=reporter,
         )
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")

@@ -168,6 +168,19 @@ def test_halt_verdict_blocks_gate_3_by_default(tmp_path, monkeypatch):
     assert record.status.value == "completed"
 
 
+def test_halt_verdict_runs_explainability_in_cheap_mode(tmp_path, monkeypatch):
+    """JUDGMENT_ROADMAP.md Task 6: a HALT verdict must not pay for full
+    SHAP/PDP explainability on a model that will not ship, and the reason
+    must be logged where the dashboard/user can see it, not just implied by
+    a thinner report."""
+    reg, ui_run_id, store_root = _run_execute(
+        tmp_path, monkeypatch, allow_deploy_on_halt=False
+    )
+    record = reg.get(ui_run_id)
+    messages = [e.message for e in record.events]
+    assert any("cheap mode" in m.lower() and "halt" in m.lower() for m in messages)
+
+
 def test_halt_verdict_with_override_offers_gate_3_and_stamps_the_warning(
     tmp_path, monkeypatch
 ):

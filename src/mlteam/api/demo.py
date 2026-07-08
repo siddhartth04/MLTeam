@@ -126,6 +126,15 @@ def seed_demo_run(
         spec = result.initial.problem_spec
         pipeline = result.initial.pipeline
         stage(Stage.EXPLAIN, StageStatus.ACTIVE)
+        from mlteam.api.run_manager import _explainability_effort
+
+        effort, cheap_reason = _explainability_effort(result)
+        if cheap_reason is not None:
+            reporter.log(
+                f"Explainability running in cheap mode: {cheap_reason}",
+                level="warning",
+                stage=Stage.EXPLAIN.value,
+            )
         explain_report = explain_model(
             store,
             result.best_model,
@@ -134,6 +143,7 @@ def seed_demo_run(
             primary_metric=spec.primary_metric,
             n_folds=5,
             run_id=result.initial.run_id,
+            effort=effort,
             reporter=reporter,
         )
         stage(Stage.EXPLAIN, StageStatus.DONE, f"top: {explain_report.importances[0].feature}")

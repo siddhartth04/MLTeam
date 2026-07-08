@@ -18,7 +18,7 @@ work already paid for.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import polars as pl
@@ -65,6 +65,15 @@ _TOP_PDP_FEATURES = 3
 _SHAP_MAX_ROWS = 500
 _MAX_RESIDUAL_SLICES = 8
 _MIN_SLICE_ROWS = 5
+# JUDGMENT_ROADMAP.md Task 6 ("value-of-computation v0"): a HALT/exhausted-
+# unfit run doesn't need SHAP/PDP-grade explainability -- observed live, the
+# platform spent the same ~hour polishing explainability for an unshippable
+# model as for a shippable one. "cheap" effort skips SHAP/PDP entirely and
+# runs permutation importance with fewer repeats (wider std, disclosed in
+# the figure title rather than hidden).
+Effort = Literal["full", "cheap"]
+_FULL_PERMUTATION_N_REPEATS = 5
+_CHEAP_PERMUTATION_N_REPEATS = 2
 
 
 def _oof_permutation_importance(
@@ -257,6 +266,7 @@ def explain_model(
     primary_metric: str,
     n_folds: int = 5,
     seed: int = 42,
+    effort: Effort = "full",
     reporter: ProgressReporter | None = None,
 ) -> ExplainabilityReport:
     """Compute importances + effect figures and store an ExplainabilityReport.
@@ -269,6 +279,12 @@ def explain_model(
     the final all-data-fit model directly: both describe the FITTED MODEL's
     behavior/attributions on realistic input values, not an out-of-sample
     performance estimate, so there is no equivalent leakage concern for them.
+
+    ``effort="cheap"`` (JUDGMENT_ROADMAP.md Task 6): skips SHAP/PDP figures
+    entirely and reduces permutation importance's ``n_repeats`` -- for a
+    HALT/unfit run that will not ship, the caller decides this so the
+    reason is logged where the verdict is actually known; this function
+    only implements the resulting compute budget.
 
     ``reporter``, if given, logs one line per CV fold as the OOF refit
     progresses — a single house-prices run spent 45+ silent minutes here
@@ -310,13 +326,17 @@ def explain_model(
         reporter=reporter,
         reporter_stage="explain",
     )
-    importances = _oof_permutation_importance(oof, scorer=scorer, seed=seed)
+    n_repeats = _CHEAP_PERMUTATION_N_REPEATS if effort == "cheap" else _FULL_PERMUTATION_N_REPEATS
+    importances = _oof_permutation_importance(oof, scorer=scorer, seed=seed, n_repeats=n_repeats)
 
     figures: list[FigureRef] = []
+    perm_title = "Permutation importance (out-of-fold)"
+    if effort == "cheap":
+        perm_title += f" -- cheap mode: {n_repeats} repeats, std wider than usual"
     perm_fig = bar_figure(
         [fi.feature for fi in importances],
         [fi.importance for fi in importances],
-        title="Permutation importance (out-of-fold)",
+        title=perm_title,
         x_title=f"mean importance ({primary_metric} drop, out-of-fold)",
     )
     figures.append(
@@ -327,24 +347,25 @@ def explain_model(
         )
     )
 
-    for fi in importances[:_TOP_PDP_FEATURES]:
-        try:
-            pdp_fig = _partial_dependence_figure(
-                pipeline, frame, fi.feature, task_is_classification=task_is_classification
+    if effort == "full":
+        for fi in importances[:_TOP_PDP_FEATURES]:
+            try:
+                pdp_fig = _partial_dependence_figure(
+                    pipeline, frame, fi.feature, task_is_classification=task_is_classification
+                )
+            except Exception as exc:  # PDP can fail on some feature types
+                _log.info("pdp_skipped", feature=fi.feature, error=str(exc))
+                continue
+            figures.append(
+                FigureRef(
+                    kind="partial_dependence",
+                    title=f"Partial dependence: {fi.feature}",
+                    blob_hash=store_figure(store, pdp_fig),
+                    feature=fi.feature,
+                )
             )
-        except Exception as exc:  # PDP can fail on some feature types
-            _log.info("pdp_skipped", feature=fi.feature, error=str(exc))
-            continue
-        figures.append(
-            FigureRef(
-                kind="partial_dependence",
-                title=f"Partial dependence: {fi.feature}",
-                blob_hash=store_figure(store, pdp_fig),
-                feature=fi.feature,
-            )
-        )
 
-    shap_fig = _shap_summary_figure(pipeline, frame, seed=seed)
+    shap_fig = _shap_summary_figure(pipeline, frame, seed=seed) if effort == "full" else None
     shap_available = shap_fig is not None
     if shap_fig is not None:
         figures.append(
@@ -387,5 +408,6 @@ def explain_model(
         figures=len(figures),
         shap=shap_available,
         residual_slices=len(residual_slices),
+        effort=effort,
     )
     return report

@@ -1,8 +1,12 @@
 import type { Config } from "tailwindcss";
 
 /**
- * Indigo control-room design tokens. A deep navy/charcoal base, electric
- * indigo/violet accent, and neon-ish semantic colors for pass/fail/pending.
+ * Light, professional design tokens. A calm off-white canvas, crisp white
+ * cards, a confident indigo accent, and clear semantic colors for
+ * pass/fail/pending. Token NAMES are preserved from the previous theme so
+ * component markup is unchanged — only the values (and their light/dark
+ * intent) flip: higher `base` numbers are the recessed/page surfaces, lower
+ * numbers are the subtle raised fills and borders.
  */
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}", "./lib/**/*.{ts,tsx}"],
@@ -10,45 +14,48 @@ const config: Config = {
     extend: {
       colors: {
         base: {
-          900: "#080a16", // page background
-          850: "#0b0e1f",
-          800: "#0f1428", // panel
-          700: "#151b33", // raised panel
-          600: "#1c2440", // border-ish
-          500: "#28324f",
+          900: "#f5f6f8", // page background (recessed canvas)
+          850: "#f8f9fb", // sidebar
+          800: "#ffffff", // panel / card surface
+          700: "#f1f3f6", // raised fill / hover / chip
+          600: "#e4e7ec", // borders
+          500: "#d5d9e0", // stronger borders / raised outline
         },
         ink: {
-          DEFAULT: "#e8ecf8",
-          muted: "#9aa6c8",
-          faint: "#5f6b8f",
+          DEFAULT: "#1a2231", // primary text (dark slate)
+          muted: "#586173", // secondary text
+          faint: "#98a1b0", // tertiary text / hints
         },
         accent: {
-          DEFAULT: "#7c5cff", // electric indigo
-          bright: "#9d84ff",
-          dim: "#5a3fd6",
-          glow: "#7c5cff",
+          DEFAULT: "#4f46e5", // indigo-600 — button fills (white text passes AA)
+          bright: "#4338ca", // indigo-700 — text emphasis on light surfaces
+          dim: "#6366f1", // indigo-500 — gradient / subtle
+          glow: "#6366f1",
         },
-        cyan: { DEFAULT: "#31d0ff", dim: "#1a92c4" },
-        ok: { DEFAULT: "#38e8a0", dim: "#1f9e6c" },
-        warn: { DEFAULT: "#ffb648", dim: "#c98420" },
-        danger: { DEFAULT: "#ff5d73", dim: "#c33a4e" },
+        cyan: { DEFAULT: "#0891b2", dim: "#0e7490" },
+        ok: { DEFAULT: "#059669", dim: "#047857" },
+        warn: { DEFAULT: "#d97706", dim: "#b45309" },
+        danger: { DEFAULT: "#dc2626", dim: "#b91c1c" },
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "ui-monospace", "monospace"],
       },
       boxShadow: {
-        glass: "0 8px 40px -12px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)",
-        glow: "0 0 24px -2px var(--tw-shadow-color)",
-        "glow-lg": "0 0 48px -4px var(--tw-shadow-color)",
+        // Clean, layered elevation tuned for a light canvas.
+        glass:
+          "0 1px 2px rgba(16,24,40,0.04), 0 6px 20px -8px rgba(16,24,40,0.10)",
+        card: "0 1px 2px rgba(16,24,40,0.05), 0 1px 3px rgba(16,24,40,0.06)",
+        glow: "0 8px 24px -8px var(--tw-shadow-color)",
+        "glow-lg": "0 16px 40px -12px var(--tw-shadow-color)",
       },
       backgroundImage: {
-        "accent-grad": "linear-gradient(135deg, #7c5cff 0%, #31d0ff 100%)",
-        "panel-grad": "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0))",
+        "accent-grad": "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
+        "panel-grad": "linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0))",
       },
       keyframes: {
         "pulse-ring": {
-          "0%": { transform: "scale(0.8)", opacity: "0.7" },
+          "0%": { transform: "scale(0.8)", opacity: "0.55" },
           "100%": { transform: "scale(2.2)", opacity: "0" },
         },
         "flow-dash": { to: { strokeDashoffset: "-24" } },
@@ -58,8 +65,8 @@ const config: Config = {
           to: { opacity: "1", transform: "translateY(0)" },
         },
         breathe: {
-          "0%, 100%": { opacity: "0.55" },
-          "50%": { opacity: "1" },
+          "0%, 100%": { opacity: "0.5" },
+          "50%": { opacity: "0.85" },
         },
       },
       animation: {

@@ -141,11 +141,11 @@ export function EmptyState({ icon, title, hint }: { icon: string; title: string;
 }
 
 export const STAGE_COLOR: Record<StageStatus, string> = {
-  pending: "#39415f",
-  active: "#7c5cff",
-  done: "#38e8a0",
-  awaiting_approval: "#ffb648",
-  rejected: "#ff5d73",
-  skipped: "#5f6b8f",
-  failed: "#ff5d73",
+  pending: "#cbd2de",
+  active: "#4f46e5",
+  done: "#059669",
+  awaiting_approval: "#d97706",
+  rejected: "#dc2626",
+  skipped: "#98a1b0",
+  failed: "#dc2626",
 };

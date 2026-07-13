@@ -212,6 +212,17 @@ def create_app(settings: APISettings | None = None) -> FastAPI:
         name: str = Form(""),
         file: UploadFile | None = File(None),
     ) -> dict[str, str]:
+        # NOTE: demo=True with a real uploaded file is intentionally still
+        # accepted here -- tests rely on this combination to exercise upload
+        # handling (filename sanitization, settings forwarding) offline and
+        # deterministically, without the pipeline needing to run to
+        # completion. Demo mode replays a FIXED fixture scripted for the
+        # built-in churn dataset regardless of what's uploaded, so a HUMAN
+        # combining a real dataset with demo mode in the dashboard will
+        # still hit a confusing downstream schema error -- that footgun is
+        # prevented at the presentation layer instead (the launch form
+        # forces demo off once a file is attached), not by rejecting a
+        # combination other legitimate callers depend on.
         ui_run_id = f"run-{uuid.uuid4().hex[:10]}"
         settings.upload_dir.mkdir(parents=True, exist_ok=True)
         if file is not None:

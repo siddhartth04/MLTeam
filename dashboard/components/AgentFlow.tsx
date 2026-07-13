@@ -17,13 +17,13 @@ const R = 218; // orbit radius
 const NODE_R = 30;
 
 const COLORS: Record<StageStatus, { ring: string; fill: string; glow: string }> = {
-  pending: { ring: "#2b3352", fill: "#141a30", glow: "transparent" },
-  active: { ring: "#7c5cff", fill: "#221a44", glow: "#7c5cff" },
-  done: { ring: "#38e8a0", fill: "#10261d", glow: "#38e8a0" },
-  awaiting_approval: { ring: "#ffb648", fill: "#2a2110", glow: "#ffb648" },
-  rejected: { ring: "#ff5d73", fill: "#2a1116", glow: "#ff5d73" },
-  skipped: { ring: "#4a557a", fill: "#12172a", glow: "transparent" },
-  failed: { ring: "#ff5d73", fill: "#2a1116", glow: "#ff5d73" },
+  pending: { ring: "#cbd2de", fill: "#f3f4f8", glow: "transparent" },
+  active: { ring: "#4f46e5", fill: "#eef0fe", glow: "#6366f1" },
+  done: { ring: "#059669", fill: "#e7f7f0", glow: "#10b981" },
+  awaiting_approval: { ring: "#d97706", fill: "#fdf4e5", glow: "#f59e0b" },
+  rejected: { ring: "#dc2626", fill: "#fdecec", glow: "#ef4444" },
+  skipped: { ring: "#c3c9d5", fill: "#f4f5f8", glow: "transparent" },
+  failed: { ring: "#dc2626", fill: "#fdecec", glow: "#ef4444" },
 };
 
 interface NodePos {
@@ -74,18 +74,18 @@ export function AgentFlow({
       <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="h-full w-full">
         <defs>
           <radialGradient id="hubGrad" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#7c5cff" stopOpacity="0.5" />
-            <stop offset="60%" stopColor="#31d0ff" stopOpacity="0.12" />
-            <stop offset="100%" stopColor="#31d0ff" stopOpacity="0" />
+            <stop offset="0%" stopColor="#6366f1" stopOpacity="0.16" />
+            <stop offset="60%" stopColor="#22d3ee" stopOpacity="0.06" />
+            <stop offset="100%" stopColor="#22d3ee" stopOpacity="0" />
           </radialGradient>
           <linearGradient id="edgeGrad" x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor="#7c5cff" stopOpacity="0.05" />
-            <stop offset="100%" stopColor="#7c5cff" stopOpacity="0.5" />
+            <stop offset="0%" stopColor="#6366f1" stopOpacity="0.08" />
+            <stop offset="100%" stopColor="#4f46e5" stopOpacity="0.55" />
           </linearGradient>
         </defs>
 
         {/* orbit guide */}
-        <circle cx={C} cy={C} r={R} fill="none" stroke="#232c49" strokeWidth={1} strokeDasharray="2 6" />
+        <circle cx={C} cy={C} r={R} fill="none" stroke="#dde1e9" strokeWidth={1} strokeDasharray="2 6" />
 
         {/* edges: store <-> node */}
         {nodes.map((node) => {
@@ -99,7 +99,7 @@ export function AgentFlow({
               y1={C}
               x2={node.x}
               y2={node.y}
-              stroke={activeEdge ? "url(#edgeGrad)" : doneEdge ? "#38e8a033" : "#1c2440"}
+              stroke={activeEdge ? "url(#edgeGrad)" : doneEdge ? "#05966955" : "#e4e7ec"}
               strokeWidth={activeEdge ? 2.5 : 1.2}
               strokeDasharray={activeEdge ? "5 7" : undefined}
               className={activeEdge ? "animate-flow-dash" : undefined}
@@ -109,15 +109,15 @@ export function AgentFlow({
 
         {/* central artifact store */}
         <circle cx={C} cy={C} r={92} fill="url(#hubGrad)" className={anyActive ? "animate-breathe" : ""} />
-        <circle cx={C} cy={C} r={54} fill="#0d1223" stroke="#33407a" strokeWidth={1.5} />
-        <circle cx={C} cy={C} r={54} fill="none" stroke="#7c5cff" strokeWidth={1} opacity={0.35} />
+        <circle cx={C} cy={C} r={54} fill="#ffffff" stroke="#c7cbf5" strokeWidth={1.5} />
+        <circle cx={C} cy={C} r={54} fill="none" stroke="#6366f1" strokeWidth={1} opacity={0.4} />
         <text x={C} y={C - 6} textAnchor="middle" className="fill-ink" fontSize="15" fontWeight="700">
           ARTIFACT
         </text>
         <text x={C} y={C + 13} textAnchor="middle" className="fill-ink" fontSize="15" fontWeight="700">
           STORE
         </text>
-        <text x={C} y={C + 32} textAnchor="middle" fill="#5f6b8f" fontSize="9" letterSpacing="2">
+        <text x={C} y={C + 32} textAnchor="middle" fill="#98a1b0" fontSize="9" letterSpacing="2">
           HUB · CONTENT-ADDRESSED
         </text>
 
@@ -157,7 +157,7 @@ export function AgentFlow({
                 textAnchor="middle"
                 dy="6"
                 fontSize="18"
-                fill={st === "pending" ? "#5f6b8f" : "#e8ecf8"}
+                fill={st === "pending" ? "#98a1b0" : "#1a2231"}
               >
                 {node.icon}
               </text>
@@ -167,7 +167,7 @@ export function AgentFlow({
                 dy={NODE_R + 15}
                 fontSize="10"
                 fontWeight="600"
-                fill={st === "pending" ? "#5f6b8f" : st === "active" ? "#9d84ff" : st === "done" ? "#38e8a0" : "#9aa6c8"}
+                fill={st === "pending" ? "#98a1b0" : st === "active" ? "#4338ca" : st === "done" ? "#059669" : "#586173"}
               >
                 {node.short}
               </text>

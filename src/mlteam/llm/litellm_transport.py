@@ -18,6 +18,7 @@ Install with the optional extra:  uv sync --extra litellm
 from __future__ import annotations
 
 import json
+import re
 import time
 
 import structlog
@@ -31,6 +32,20 @@ _SCHEMA_INSTRUCTION = (
     "\n\nYou MUST respond with a single JSON object that validates against this "
     "JSON Schema. Output only the JSON — no prose, no code fences:\n{schema}"
 )
+
+# Some providers wrap structured JSON output in a markdown code fence despite
+# being told not to (observed live: DeepSeek-V3.2 via Azure AI Foundry, on
+# longer agent prompts, even with the explicit "no code fences" instruction
+# above) -- json.loads() on a string starting with a backtick fails instantly
+# with a useless "Expecting value: line 1 column 1" error. Strip a single
+# leading/trailing fence (optionally ```json) so the raw JSON underneath
+# reaches the parser; text without a fence passes through unchanged.
+_CODE_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n?\s*```\s*$", re.DOTALL)
+
+
+def _strip_code_fence(text: str) -> str:
+    match = _CODE_FENCE_RE.match(text)
+    return match.group(1) if match else text
 
 
 class LiteLLMTransport:
@@ -100,7 +115,7 @@ class LiteLLMTransport:
         choice = response.choices[0]
         if getattr(choice, "finish_reason", None) == "content_filter":
             raise LLMRefusalError("provider content filter declined the request")
-        text = choice.message.content or ""
+        text = _strip_code_fence(choice.message.content or "")
         usage = _extract_usage(response)
         model_name = getattr(response, "model", None) or request.model
         return LLMRawResponse(text=text, usage=usage, model=model_name, latency_seconds=latency)

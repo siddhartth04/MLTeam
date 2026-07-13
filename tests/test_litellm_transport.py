@@ -131,6 +131,35 @@ def test_validation_retry_works_over_litellm(fake_litellm):
     assert result.attempts == 2
 
 
+def test_markdown_code_fence_is_stripped(fake_litellm):
+    """DeepSeek-V3.2 via Azure AI Foundry was observed wrapping structured
+    output in a ```json fence on longer agent prompts, even with the
+    fallback path's explicit "no code fences" instruction. json.loads() on
+    a string starting with a backtick fails with an opaque
+    "Expecting value: line 1 column 1" error that gives no hint of the real
+    cause. The transport must strip a single leading/trailing fence."""
+    from mlteam.llm import LiteLLMTransport
+
+    fake_litellm(['```json\n{"label": "x", "confidence": 0.5}\n```'], supports_schema=True)
+    client = LLMClient(LiteLLMTransport(), model="openai/DeepSeek-V3.2")
+    result = client.structured(
+        agent="t", system_prompt="s", user_payload={}, schema=_answer_model()
+    )
+    assert result.attempts == 1
+    assert result.output.label == "x"
+
+
+def test_text_without_fence_passes_through_unchanged(fake_litellm):
+    from mlteam.llm import LiteLLMTransport
+
+    fake_litellm(['{"label": "clean", "confidence": 0.5}'], supports_schema=True)
+    client = LLMClient(LiteLLMTransport(), model="openai/DeepSeek-V3.2")
+    result = client.structured(
+        agent="t", system_prompt="s", user_payload={}, schema=_answer_model()
+    )
+    assert result.output.label == "clean"
+
+
 def test_content_filter_raises_refusal(fake_litellm):
     from mlteam.llm import LiteLLMTransport
 

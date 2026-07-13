@@ -8,20 +8,21 @@ import { EmptyState, Panel, SectionTitle } from "@/components/primitives";
 import { useArtifact, useLineage } from "@/lib/api";
 import type { LineageGraph, LineageNode } from "@/lib/types";
 
+// Saturated enough to read as a 4px accent bar + border on a white node.
 const TYPE_COLOR: Record<string, string> = {
-  ProblemSpec: "#7c5cff",
-  DatasetVersion: "#31d0ff",
-  DataProfile: "#38e8a0",
-  SplitPlan: "#ffb648",
-  CleaningManifest: "#9d84ff",
-  FeaturePlan: "#5eead4",
-  ExperimentPlan: "#f0a6ff",
-  TrainedModel: "#38e8a0",
-  EvaluationReport: "#31d0ff",
-  ExplainabilityReport: "#ffd166",
-  CritiqueReport: "#ff5d73",
-  DeploymentBundle: "#a0f0c0",
-  FinalReport: "#7c5cff",
+  ProblemSpec: "#4f46e5",
+  DatasetVersion: "#0891b2",
+  DataProfile: "#059669",
+  SplitPlan: "#d97706",
+  CleaningManifest: "#7c3aed",
+  FeaturePlan: "#0d9488",
+  ExperimentPlan: "#c026d3",
+  TrainedModel: "#059669",
+  EvaluationReport: "#0891b2",
+  ExplainabilityReport: "#ca8a04",
+  CritiqueReport: "#dc2626",
+  DeploymentBundle: "#16a34a",
+  FinalReport: "#4f46e5",
 };
 
 interface Placed extends LineageNode {
@@ -114,13 +115,13 @@ export default function LineagePage() {
                       key={i}
                       d={`M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`}
                       fill="none"
-                      stroke="#2a345c"
+                      stroke="#d5d9e0"
                       strokeWidth={1.3}
                     />
                   );
                 })}
                 {placed.map((n) => {
-                  const color = TYPE_COLOR[n.type] ?? "#9aa6c8";
+                  const color = TYPE_COLOR[n.type] ?? "#586173";
                   const active = n.id === selected;
                   return (
                     <g
@@ -133,16 +134,16 @@ export default function LineagePage() {
                         width={170}
                         height={40}
                         rx={10}
-                        fill={active ? "#1a2138" : "#111730"}
-                        stroke={active ? color : `${color}66`}
+                        fill={active ? "#f6f7ff" : "#ffffff"}
+                        stroke={active ? color : `${color}55`}
                         strokeWidth={active ? 2 : 1.3}
                       />
                       <rect width={4} height={40} rx={2} fill={color} />
-                      <text x={14} y={17} fontSize="11" fontWeight="700" fill="#e8ecf8">
+                      <text x={14} y={17} fontSize="11" fontWeight="700" fill="#1a2231">
                         {n.type}
                         {n.protected ? "  🔒" : ""}
                       </text>
-                      <text x={14} y={31} fontSize="9" fill="#5f6b8f" fontFamily="monospace">
+                      <text x={14} y={31} fontSize="9" fill="#98a1b0" fontFamily="monospace">
                         {n.producer} · {n.short_id}
                       </text>
                     </g>

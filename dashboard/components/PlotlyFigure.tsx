@@ -1,6 +1,6 @@
 "use client";
 
-// Renders a stored Plotly figure (fetched as JSON) themed for the dark shell.
+// Renders a stored Plotly figure (fetched as JSON) themed for the light shell.
 // Plotly is client-only, so it's dynamically imported with SSR disabled.
 
 import dynamic from "next/dynamic";
@@ -10,14 +10,14 @@ import { figureUrl } from "@/lib/api";
 
 const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
 
-const DARK_LAYOUT = {
+const LIGHT_LAYOUT = {
   paper_bgcolor: "rgba(0,0,0,0)",
   plot_bgcolor: "rgba(0,0,0,0)",
-  font: { color: "#9aa6c8", family: "Inter, sans-serif", size: 12 },
-  colorway: ["#7c5cff", "#31d0ff", "#38e8a0", "#ffb648", "#ff5d73"],
+  font: { color: "#586173", family: "Inter, sans-serif", size: 12 },
+  colorway: ["#4f46e5", "#0891b2", "#059669", "#d97706", "#dc2626"],
   margin: { l: 60, r: 20, t: 40, b: 50 },
-  xaxis: { gridcolor: "#1c2440", zerolinecolor: "#28324f" },
-  yaxis: { gridcolor: "#1c2440", zerolinecolor: "#28324f" },
+  xaxis: { gridcolor: "#eceef2", zerolinecolor: "#dfe2e8" },
+  yaxis: { gridcolor: "#eceef2", zerolinecolor: "#dfe2e8" },
 };
 
 export function PlotlyFigure({ blobHash, height = 320 }: { blobHash: string; height?: number }) {
@@ -41,7 +41,7 @@ export function PlotlyFigure({ blobHash, height = 320 }: { blobHash: string; hei
   return (
     <Plot
       data={fig.data as never}
-      layout={{ ...DARK_LAYOUT, ...(fig.layout as object), autosize: true, height } as never}
+      layout={{ ...LIGHT_LAYOUT, ...(fig.layout as object), autosize: true, height } as never}
       config={{ displayModeBar: false, responsive: true } as never}
       style={{ width: "100%", height }}
       useResizeHandler

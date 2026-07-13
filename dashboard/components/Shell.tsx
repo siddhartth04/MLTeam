@@ -217,7 +217,7 @@ function GateBadge() {
   const count = gates?.length ?? 0;
   if (count === 0) return null;
   return (
-    <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-warn px-1.5 text-[11px] font-bold text-base-900">
+    <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-warn px-1.5 text-[11px] font-bold text-white">
       {count}
     </span>
   );

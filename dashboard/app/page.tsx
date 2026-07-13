@@ -28,12 +28,26 @@ export default function LaunchPage() {
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDrag(false);
-    const f = e.dataTransfer.files?.[0];
-    if (f) setFile(f);
+  // Demo mode replays a FIXED scenario scripted for the built-in churn
+  // dataset, regardless of what's uploaded — combining it with a real file
+  // produces a confusing failure several steps downstream (the requirement
+  // agent proposes a target column, e.g. "churned", that doesn't exist in
+  // the real data). Attaching a file always forces Live Agents so this
+  // mismatch can't happen from the dashboard.
+  const setFileAndForceLive = useCallback((f: File | null) => {
+    setFile(f);
+    if (f) setDemo(false);
   }, []);
+
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setDrag(false);
+      const f = e.dataTransfer.files?.[0];
+      if (f) setFileAndForceLive(f);
+    },
+    [setFileAndForceLive],
+  );
 
   const launch = async () => {
     if (!goal.trim()) {
@@ -105,7 +119,7 @@ export default function LaunchPage() {
                 type="file"
                 accept=".csv,.parquet"
                 className="hidden"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                onChange={(e) => setFileAndForceLive(e.target.files?.[0] ?? null)}
               />
               <div className="text-3xl text-accent-bright/70">⬇</div>
               {file ? (
@@ -114,6 +128,16 @@ export default function LaunchPage() {
                   <span className="ml-2 text-xs text-ink-faint">
                     {(file.size / 1024).toFixed(0)} KB
                   </span>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFileAndForceLive(null);
+                      if (inputRef.current) inputRef.current.value = "";
+                    }}
+                    className="ml-2 text-xs text-ink-faint underline hover:text-danger"
+                  >
+                    remove
+                  </button>
                 </div>
               ) : (
                 <>
@@ -129,9 +153,15 @@ export default function LaunchPage() {
           <Panel eyebrow="Step 3" title="Execution mode">
             <div className="grid grid-cols-2 gap-3">
               <button
-                onClick={() => setDemo(true)}
+                onClick={() => !file && setDemo(true)}
+                disabled={!!file}
+                title={file ? "Demo replays a fixed scenario and can't process an uploaded dataset" : undefined}
                 className={`rounded-xl border p-4 text-left transition-all ${
-                  demo ? "border-accent/60 bg-accent/10" : "border-base-500/60 bg-base-700/40"
+                  file
+                    ? "cursor-not-allowed border-base-600 bg-base-700/20 opacity-50"
+                    : demo
+                      ? "border-accent/60 bg-accent/10"
+                      : "border-base-500/60 bg-base-700/40"
                 }`}
               >
                 <div className="font-semibold text-ink">Demo (replay)</div>
@@ -151,6 +181,12 @@ export default function LaunchPage() {
                 </div>
               </button>
             </div>
+            {file && (
+              <p className="mt-2 text-xs text-ink-faint">
+                Demo replays a fixed scenario scripted for the built-in dataset, so it's disabled while a file is
+                attached — remove the upload to use it.
+              </p>
+            )}
 
             {error && <div className="mt-4 text-sm text-danger">{error}</div>}
 

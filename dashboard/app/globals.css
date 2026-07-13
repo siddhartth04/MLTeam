@@ -5,25 +5,26 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
 body {
-  background: #080a16;
-  color: #e8ecf8;
+  background: #f5f6f8;
+  color: #1a2231;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Ambient control-room backdrop: soft indigo/cyan glows over a fine grid. */
+/* Ambient canvas: a whisper of indigo warmth top-left over a faint grid —
+   present enough to feel considered, quiet enough to stay professional. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -2;
   background:
-    radial-gradient(60rem 40rem at 12% -8%, rgba(124, 92, 255, 0.16), transparent 60%),
-    radial-gradient(50rem 40rem at 108% 8%, rgba(49, 208, 255, 0.1), transparent 55%),
-    radial-gradient(60rem 50rem at 50% 120%, rgba(124, 92, 255, 0.08), transparent 60%);
+    radial-gradient(52rem 34rem at 8% -10%, rgba(99, 102, 241, 0.07), transparent 60%),
+    radial-gradient(44rem 34rem at 106% 4%, rgba(8, 145, 178, 0.05), transparent 58%);
 }
 body::after {
   content: "";
@@ -31,44 +32,46 @@ body::after {
   inset: 0;
   z-index: -1;
   background-image:
-    linear-gradient(rgba(124, 140, 200, 0.04) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(124, 140, 200, 0.04) 1px, transparent 1px);
+    linear-gradient(rgba(26, 34, 49, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(26, 34, 49, 0.025) 1px, transparent 1px);
   background-size: 48px 48px;
-  mask-image: radial-gradient(circle at 50% 30%, black, transparent 85%);
+  mask-image: radial-gradient(circle at 50% 20%, black, transparent 80%);
 }
 
 @layer components {
+  /* Cards read as crisp, solid surfaces with a soft, layered shadow —
+     cleaner and more production-grade than translucent glass. */
   .glass {
-    @apply rounded-2xl border border-base-600/70 bg-base-800/60 shadow-glass backdrop-blur-xl;
-    background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0));
+    @apply rounded-2xl border border-base-600 bg-base-800 shadow-glass;
   }
   .glass-raised {
-    @apply rounded-2xl border border-base-500/60 bg-base-700/70 shadow-glass backdrop-blur-xl;
+    @apply rounded-2xl border border-base-600 bg-base-800 shadow-card;
   }
   .chip {
-    @apply inline-flex items-center gap-1.5 rounded-full border border-base-500/60 bg-base-700/60 px-3 py-1 text-xs font-medium text-ink-muted;
+    @apply inline-flex items-center gap-1.5 rounded-full border border-base-600 bg-base-700 px-3 py-1 text-xs font-medium text-ink-muted;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-40;
   }
   .btn-primary {
     @apply btn text-white;
-    background-image: linear-gradient(135deg, #7c5cff, #5a3fd6);
-    box-shadow: 0 8px 24px -8px rgba(124, 92, 255, 0.7);
+    background-image: linear-gradient(135deg, #6366f1, #4f46e5);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 6px 16px -6px rgba(79, 70, 229, 0.5);
   }
   .btn-primary:hover:not(:disabled) {
-    box-shadow: 0 10px 32px -6px rgba(124, 92, 255, 0.9);
+    box-shadow: 0 2px 4px rgba(16, 24, 40, 0.1), 0 10px 22px -6px rgba(79, 70, 229, 0.6);
     transform: translateY(-1px);
   }
   .btn-ghost {
-    @apply btn border border-base-500/70 bg-base-700/40 text-ink hover:bg-base-600/60;
+    @apply btn border border-base-600 bg-base-800 text-ink hover:border-base-500 hover:bg-base-700;
   }
   .btn-ok {
-    @apply btn text-base-900;
-    background-image: linear-gradient(135deg, #38e8a0, #1f9e6c);
+    @apply btn text-white;
+    background-image: linear-gradient(135deg, #10b981, #059669);
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08), 0 6px 16px -6px rgba(5, 150, 105, 0.45);
   }
   .btn-danger {
-    @apply btn border border-danger/40 bg-danger/10 text-danger hover:bg-danger/20;
+    @apply btn border border-danger/30 bg-danger/10 text-danger hover:bg-danger/20;
   }
   .stat-value {
     @apply font-mono text-3xl font-semibold tracking-tight text-ink;
@@ -77,11 +80,11 @@ body::after {
     @apply font-mono text-xs text-ink-muted;
   }
   .label-eyebrow {
-    @apply text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-faint;
+    @apply text-[11px] font-semibold uppercase tracking-[0.16em] text-ink-faint;
   }
 }
 
-/* Scrollbars, tuned to the theme. */
+/* Scrollbars, tuned to the light theme. */
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -90,18 +93,19 @@ body::after {
   background: transparent;
 }
 *::-webkit-scrollbar-thumb {
-  background: rgba(124, 140, 200, 0.18);
+  background: rgba(26, 34, 49, 0.16);
   border-radius: 10px;
   border: 2px solid transparent;
   background-clip: content-box;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 140, 200, 0.32);
+  background: rgba(26, 34, 49, 0.28);
   background-clip: content-box;
 }
 
-/* Report iframes render on white; give them a rounded, contained frame. */
+/* Report iframes render on white; give them a contained, bordered frame. */
 .report-frame {
   background: #ffffff;
   border-radius: 12px;
+  border: 1px solid #e4e7ec;
 }

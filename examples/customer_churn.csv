@@ -7,7 +7,7 @@ CUST-00004,53.0,63.0,33.22,3.0,month-to-month,bank-transfer,active,1
 CUST-00005,66.0,54.0,38.43,6.0,month-to-month,card,active,1
 CUST-00006,69.0,42.0,50.39,0.0,month-to-month,e-check,active,0
 CUST-00007,31.0,54.0,64.75,1.0,one-year,card,active,1
-CUST-00008,21.0,23.0,112.8,2.0,month-to-month,e-check,active,1
+CUST-00008,21.0,23.0,112.8,2.0,month-to-month,e-check,active,0
 CUST-00009,36.0,52.0,47.84,2.0,two-year,card,active,0
 CUST-00010,35.0,15.0,109.86,3.0,one-year,bank-transfer,active,1
 CUST-00011,72.0,32.0,88.05,0.0,month-to-month,bank-transfer,active,1
